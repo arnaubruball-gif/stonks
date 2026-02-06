@@ -3,140 +3,137 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="AI Equity Dashboard", layout="wide")
+# --- 1. CONFIGURACIÓN Y ESTILO ---
+st.set_page_config(page_title="AI Equity Valuation Pro", layout="wide")
 
-# --- ESTILO CSS PARA CAJAS NEGRAS Y TEXTO CLARO ---
+# Estilo para cajas negras y métricas de alta visibilidad
 st.markdown("""
     <style>
     .main { background-color: #0e1117; color: white; }
-    /* Estilo para las métricas */
-    [data-testid="stMetricValue"] { color: #00ff00 !important; font-weight: bold; }
-    [data-testid="stMetricLabel"] { color: #ffffff !important; font-size: 1.1rem; }
     div[data-testid="stMetric"] {
-        background-color: #1a1c23;
+        background-color: #161b22;
         border: 1px solid #30363d;
         padding: 20px;
-        border-radius: 12px;
+        border-radius: 10px;
     }
-    /* Estilo para los tabs y textos */
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #1a1c23;
-        border-radius: 4px;
-        color: white;
-    }
+    [data-testid="stMetricValue"] { color: #00ff00 !important; }
+    [data-testid="stMetricLabel"] { color: #8b949e !important; }
+    .stTabs [data-baseweb="tab-list"] { background-color: #0e1117; }
+    .stTabs [data-baseweb="tab"] { color: white; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNCIONES DE CACHÉ ---
+# --- 2. LÓGICA DE DATOS Y PAÍSES ---
+# Mapeo de crecimiento PIB estimado a largo plazo
+PIB_DATA = {
+    "United States": 2.2, "Spain": 1.5, "Germany": 1.1, "France": 1.3,
+    "United Kingdom": 1.4, "Switzerland": 1.6, "Netherlands": 1.5,
+    "China": 4.0, "Japan": 0.5, "Canada": 1.8, "Default": 2.0
+}
+
 @st.cache_data
-def get_stock_data(ticker):
+def get_stock_full_data(ticker):
     stock = yf.Ticker(ticker)
     info = stock.info
+    # Intentar capturar Free Cash Flow
     try:
-        cashflow = stock.cashflow
-        fcf = cashflow.loc['Free Cash Flow'].iloc[0] if 'Free Cash Flow' in cashflow.index else 0
+        fcf = stock.cashflow.loc['Free Cash Flow'].iloc[0]
     except:
-        fcf = 0
+        fcf = info.get('freeCashflow', 0)
     return info, fcf
 
-# --- SIDEBAR ---
-st.sidebar.header("🔍 Configuración de Análisis")
-
-# Lista rápida de ejemplo (puedes ampliarla a 500)
-tickers_populares = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "MC.PA", "ASML", "ITX.MC", "SAN.MC", "SAP"]
-ticker_choice = st.sidebar.selectbox("Selecciona un Ticker popular:", tickers_populares)
-ticker_manual = st.sidebar.text_input("O escribe otro Ticker:", ticker_choice).upper()
-
-st.sidebar.divider()
-st.sidebar.subheader("⚙️ Parámetros del Modelo")
-k = st.sidebar.slider("Tasa de Descuento (k) %", 5.0, 15.0, 9.5) / 100
-g = st.sidebar.slider("Crecimiento Perpetuo (g) %", 0.0, 5.0, 2.5) / 100
-
-# --- CUERPO PRINCIPAL ---
-st.title(f"🚀 Análisis de Valoración: {ticker_manual}")
+# --- 3. SIDEBAR (ENTRADAS) ---
+st.sidebar.header("🔍 Configuración")
+ticker = st.sidebar.text_input("Ticker (ej: AAPL, MSFT, ITX.MC, MC.PA)", "AAPL").upper()
 
 try:
-    info, fcf_actual = get_stock_data(ticker_manual)
+    info, fcf_actual = get_stock_full_data(ticker)
+    pais = info.get('country', 'Default')
+    g_sugerida = PIB_DATA.get(pais, PIB_DATA["Default"])
+
+    st.sidebar.divider()
+    st.sidebar.subheader("⚙️ Parámetros de Valoración")
     
-    # MÉTRICAS PRINCIPALES EN CAJAS OSCURAS
+    # El slider de crecimiento se ajusta automáticamente al PIB del país detectado
+    g = st.sidebar.slider(f"Crecimiento Perpetuo (g) % - Ref: PIB {pais}", 0.0, 5.0, g_sugerida) / 100
+    k = st.sidebar.slider("Tasa de Descuento (k) % - Retorno Exigido", 5.0, 18.0, 9.0) / 100
+
+    # --- 4. PANEL PRINCIPAL ---
+    st.title(f"📊 Valoración Intrínseca: {info.get('longName', ticker)}")
+    st.caption(f"Sede: {pais} | Sector: {info.get('sector', 'N/A')} | Industria: {info.get('industry', 'N/A')}")
+
+    # MÉTRICAS CLAVE
+    m1, m2, m3, m4 = st.columns(4)
     price = info.get('currentPrice', 1)
     currency = info.get('currency', 'USD')
     
-    m1, m2, m3, m4 = st.columns(4)
     m1.metric("Precio Actual", f"{price} {currency}")
-    m2.metric("PER (Trailing)", f"{info.get('trailingPE', 'N/A')}")
-    m3.metric("Dividend Yield", f"{info.get('dividendYield', 0)*100:.2f}%")
-    m4.metric("FCF (Último)", f"{fcf_actual/1e9:.2f}B {currency}")
+    m2.metric("PER (P/E Ratio)", info.get('trailingPE', 'N/A'))
+    m3.metric("Div. Yield", f"{info.get('dividendYield', 0)*100:.2f}%")
+    m4.metric("FCF Anual", f"{fcf_actual/1e9:.2f}B {currency}")
 
-    st.write("---")
+    st.divider()
 
-    # MODELOS DE VALORACIÓN
-    tab_ddm, tab_dcf = st.tabs(["📊 Modelo de Dividendos (DDM)", "💸 Modelo de Flujos (DCF)"])
+    # --- 5. CÁLCULOS DE LOS MODELOS ---
+    tab_ddm, tab_dcf = st.tabs(["💡 Modelo Gordon (Dividendos)", "💰 Modelo DCF (Flujos de Caja)"])
 
     with tab_ddm:
-        st.subheader("Fórmula de Gordon Growth")
-        st.latex(r"V_0 = \frac{D_0 \times (1 + g)}{k - g}")
+        st.subheader("Valuación por Dividendos")
+        st.latex(r"V = \frac{D_0 \times (1 + g)}{k - g}")
         
-        div_rate = info.get('trailingAnnualDividendRate', 0)
-        if div_rate > 0:
-            val_ddm = (div_rate * (1 + g)) / (k - g)
-            st.info(f"Basado en un dividendo anual de {div_rate} {currency}")
-            st.metric("Valor Intrínseco DDM", f"{val_ddm:.2f} {currency}")
+        d0 = info.get('trailingAnnualDividendRate', 0)
+        if d0 > 0 and k > g:
+            val_ddm = (d0 * (1 + g)) / (k - g)
+            st.metric("Valor Objetivo DDM", f"{val_ddm:.2f} {currency}")
         else:
             val_ddm = 0
-            st.warning("Esta empresa no tiene un historial de dividendos compatible con DDM.")
+            st.warning("Modelo DDM no aplicable (No hay dividendos o k < g)")
 
     with tab_dcf:
-        st.subheader("Discounted Cash Flow (5 años + Terminal)")
-        st.latex(r"Value = \sum_{t=1}^{5} \frac{FCF_t}{(1+k)^t} + \frac{TV}{(1+k)^5}")
+        st.subheader("Valuación por Descuento de Flujos")
+        st.latex(r"PV = \sum \frac{FCF_t}{(1+k)^t} + \frac{TV}{(1+k)^n}")
         
-        # Proyecciones
-        fcf_list = [fcf_actual * (1 + g)**i for i in range(1, 6)]
-        fcf_descontado = sum([f / (1 + k)**(i+1) for i, f in enumerate(fcf_list)])
+        # Proyección simplificada 5 años + Valor Terminal
+        fcf_proyectado = [fcf_actual * (1 + g)**i for i in range(1, 6)]
+        fcf_descontado = sum([f / (1 + k)**i for i, f in enumerate(fcf_proyectado, 1)])
         
-        # Valor Terminal
-        tv = (fcf_list[-1] * (1 + g)) / (k - g)
+        tv = (fcf_proyectado[-1] * (1 + g)) / (k - g)
         tv_descontado = tv / (1 + k)**5
         
-        # Equity Value
-        total_ev = fcf_descontado + tv_descontado
-        net_debt = info.get('totalDebt', 0) - info.get('totalCash', 0)
+        # Ajuste de Valor de Empresa a Valor de Capital (Equity Value)
+        debt = info.get('totalDebt', 0)
+        cash = info.get('totalCash', 0)
         shares = info.get('sharesOutstanding', 1)
         
-        val_dcf = (total_ev - net_debt) / shares
+        val_dcf = (fcf_descontado + tv_descontado - debt + cash) / shares
         
-        st.metric("Valor Intrínseco DCF", f"{val_dcf:.2f} {currency}")
-        st.write(f"*Nota: Se ha ajustado por una deuda neta de {net_debt/1e9:.2f}B.*")
+        st.metric("Valor Objetivo DCF", f"{val_dcf:.2f} {currency}")
+        st.caption(f"Ajustado por Deuda Neta de {(debt-cash)/1e9:.2f}B {currency}")
 
-    # VEREDICTO FINAL
-    st.write("---")
-    st.subheader("🎯 Resumen de Valoración y Objetivo")
+    # --- 6. RESULTADO FINAL ---
+    st.divider()
+    st.subheader("🎯 Veredicto y Precio Objetivo")
     
-    # Lógica de Objetivo
-    if val_ddm > 0 and val_dcf > 0:
-        target = (val_ddm + val_dcf) / 2
-    else:
-        target = max(val_ddm, val_dcf)
-
-    if target > 0:
-        potencial = ((target / price) - 1) * 100
+    # Promediar modelos si ambos son válidos
+    objetivo = (val_ddm + val_dcf) / 2 if (val_ddm > 0 and val_dcf > 0) else max(val_ddm, val_dcf)
+    
+    if objetivo > 0:
+        potencial = ((objetivo / price) - 1) * 100
+        c1, c2 = st.columns(2)
         
-        col_res, col_gauge = st.columns([1, 1])
+        c1.write(f"### Objetivo Promedio: **{objetivo:.2f} {currency}**")
         
-        with col_res:
-            st.write(f"### Valor Objetivo: **{target:.2f} {currency}**")
-            if price < target * 0.75:
-                st.success(f"💪 **FUERTE COMPRA** (Potencial: {potencial:.1f}%)")
-            elif price < target:
-                st.success(f"✅ **INFRAVALORADA** (Potencial: {potencial:.1f}%)")
-            elif price < target * 1.15:
-                st.warning(f"⚖️ **PRECIO JUSTO** (Margen estrecho)")
-            else:
-                st.error(f"❌ **SOBREVALORADA** (Riesgo de caída: {abs(potencial):.1f}%)")
+        # Lógica de color según el margen de seguridad
+        if price < objetivo * 0.8:
+            st.success(f"🟢 **INFRAVALORADA** | Potencial: {potencial:.2f}%")
+        elif price < objetivo:
+            st.warning(f"🟡 **PRECIO JUSTO** | Potencial: {potencial:.2f}%")
+        else:
+            st.error(f"🔴 **SOBREVALORADA** | Potencial: {potencial:.2f}%")
+            
+        st.progress(min(max(potencial + 50, 0), 100) / 100) # Barra visual de potencial
     else:
-        st.error("No hay datos suficientes para calcular un valor objetivo.")
+        st.info("Introduce un Ticker válido o ajusta los parámetros para ver el resultado.")
 
 except Exception as e:
-    st.error(f"Error cargando datos de {ticker_manual}: {e}")
+    st.error(f"Error al cargar datos: {e}")
