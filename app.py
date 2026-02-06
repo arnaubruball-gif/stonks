@@ -17,16 +17,24 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. LÓGICA DE DATOS ---
+# --- 2. FUNCIONES DE CÁLCULO ---
+def calcular_dcf(fcf, g1, gp, k, debt, cash, shares):
+    """Función limpia para evitar errores de sintaxis en la matriz"""
+    if k <= gp or shares <= 0: return 0
+    # Fase 1 (5 años)
+    fcf_list = [fcf * (1 + g1)**i for i in range(1, 6)]
+    fcf_d = sum([f / (1 + k)**i for i, f in enumerate(fcf_list, 1)])
+    # Fase 2 (Terminal)
+    tv = (fcf_list[-1] * (1 + gp)) / (k - gp)
+    tv_d = tv / (1 + k)**5
+    return (fcf_d + tv_d - debt + cash) / shares
+
 @st.cache_data
 def get_extended_data(ticker):
     stock = yf.Ticker(ticker)
     info = stock.info
     hist = stock.history(period="5y")
-    financials = stock.financials
-    balance = stock.balance_sheet
-    cashflow = stock.cashflow
-    return stock, info, hist, financials, balance, cashflow
+    return stock, info, hist
 
 # --- 3. SIDEBAR ---
 LOGO_URL = "https://cdn-icons-png.flaticon.com/512/3310/3310111.png"
@@ -35,12 +43,12 @@ st.sidebar.title("Pro Analyzer v3.0")
 ticker = st.sidebar.text_input("Ticker", "NVDA").upper()
 
 try:
-    stock, info, hist, fin, bs, cf = get_extended_data(ticker)
+    stock, info, hist = get_extended_data(ticker)
     
-    # Parámetros Sidebar
     st.sidebar.divider()
-    g_f1 = st.sidebar.slider("Crecimiento Etapa 1 (%)", 0.0, 60.0, 20.0) / 100
+    g_f1 = st.sidebar.slider("Crecimiento Etapa 1 (%)", 0.0, 60.0, 25.0) / 100
     k = st.sidebar.slider("Tasa Descuento (k) %", 5.0, 15.0, 9.0) / 100
+    g_p = 0.02 # Crecimiento perpetuo
 
     # --- 4. HEADER ---
     st.title(f"{info.get('longName', ticker)}")
@@ -49,75 +57,73 @@ try:
     col_h1.metric("Precio", f"{price} {info.get('currency')}")
     col_h2.metric("Market Cap", f"{info.get('marketCap', 0)/1e9:.2f}B")
     col_h3.metric("PER Actual", f"{info.get('trailingPE', 0):.2f}")
-    col_h4.metric("Forward PER", f"{info.get('forwardPE', 0):.2f}")
+    col_h4.metric("ROE", f"{info.get('returnOnEquity', 0)*100:.1f}%")
 
     # --- 5. MODELOS DE ANÁLISIS ---
-    t_val, t_quality, t_multiples = st.tabs(["💎 Valoración Intrínseca", "🛡️ Filtros de Calidad", "📊 Múltiplos e Histórico"])
+    t_val, t_quality, t_multiples, t_charts = st.tabs(["💎 Valoración", "🛡️ Calidad (Piotroski)", "📊 Márgenes", "📈 Histórico"])
 
     with t_val:
-        # DCF 2 ETAPAS
-        fcf_actual = info.get('freeCashflow', 0)
-        g_p = 0.02 # Crecimiento perpetuo conservador
-        fcf_list = [fcf_actual * (1 + g_f1)**i for i in range(1, 6)]
-        fcf_d = sum([f / (1 + k)**i for i, f in enumerate(fcf_list, 1)])
-        tv = (fcf_list[-1] * (1 + g_p)) / (k - g_p)
-        tv_d = tv / (1 + k)**5
-        val_dcf = (fcf_d + tv_d - info.get('totalDebt', 0) + info.get('totalCash', 0)) / info.get('sharesOutstanding', 1)
+        fcf_actual = info.get('freeCashflow') or info.get('operatingCashflow', 0) * 0.8
+        debt = info.get('totalDebt', 0)
+        cash = info.get('totalCash', 0)
+        shares = info.get('sharesOutstanding', 1)
         
-        # MODELO BENJAMIN GRAHAM (Modificado)
+        # DCF Proyectado
+        val_dcf = calcular_dcf(fcf_actual, g_f1, g_p, k, debt, cash, shares)
+        
+        # Modelo Graham
         eps = info.get('trailingEps', 0)
-        val_graham = (eps * (8.5 + 2 * (g_f1 * 100)) * 4.4) / 4.5 # 4.5 es el yield de bonos AAA
+        val_graham = (eps * (8.5 + 2 * (g_f1 * 100)) * 4.4) / 4.5
         
         v1, v2 = st.columns(2)
         v1.metric("Valor DCF (Caja)", f"{val_dcf:.2f}")
         v2.metric("Valor Graham (EPS)", f"{val_graham:.2f}")
         
-        st.write("### 📉 Matriz de Sensibilidad DCF")
-        # Reutilizamos la lógica de matriz para dar robustez
+        st.write("### 📉 Matriz de Sensibilidad (DCF)")
         sk = [k-0.01, k, k+0.01]
         sg = [g_f1-0.05, g_f1, g_f1+0.05]
-        m_data = [[((sum([(fcf_actual*(1+gi)**i)/(1+ki)**i for i in range(1,6)]) + (((fcf_actual*(1+gi)**5)*(1+g_p))/(ki-g_p))/(1+ki)**5) - info.get('totalDebt',0) + info.get('totalCash',0))/info.get('sharesOutstanding',1)) for gi in sg] for ki in sk]
-        st.table(pd.DataFrame(m_data, columns=[f"G:{g*100:.0f}%" for g in sg], index=[f"k:{k*100:.1f}%" for k in sk]))
+        
+        # Matriz generada con la función limpia
+        m_list = [[calcular_dcf(fcf_actual, gi, g_p, ki, debt, cash, shares) for gi in sg] for ki in sk]
+        df_sens = pd.DataFrame(m_list, columns=[f"G:{g*100:.0f}%" for g in sg], index=[f"k:{k*100:.1f}%" for ki in sk])
+        st.table(df_sens.style.background_gradient(cmap='RdYlGn').format("{:.2f}"))
 
     with t_quality:
-        st.subheader("Sistema de Puntuación F-Score de Piotroski")
-        
-        # Simplificación de puntos F-Score para el Dashboard
+        st.subheader("Checklist de Salud Financiera")
         points = 0
         checks = {
             "Rentabilidad Neta Positiva": info.get('returnOnAssets', 0) > 0,
             "Flujo de Caja Operativo Positivo": fcf_actual > 0,
-            "ROE > Media Sector (Proxy 15%)": info.get('returnOnEquity', 0) > 0.15,
-            "Margen Bruto Creciente (Proxy)": info.get('grossMargins', 0) > 0.40,
-            "Liquidez > 1.5x": info.get('currentRatio', 0) > 1.5
+            "ROE > 15% (Foso Competitivo)": info.get('returnOnEquity', 0) > 0.15,
+            "Margen Bruto > 40% (Pricing Power)": info.get('grossMargins', 0) > 0.40,
+            "Liquidez (Current Ratio) > 1.5": info.get('currentRatio', 0) > 1.5
         }
-        
         for text, result in checks.items():
-            col_a, col_b = st.columns([3, 1])
-            col_a.write(text)
+            c1, c2 = st.columns([3, 1])
+            c1.write(text)
             if result:
-                col_b.success("PASADO (+1)")
+                c2.success("PASADO")
                 points += 1
             else:
-                col_b.error("FALLO (0)")
-        
-        st.metric("Puntuación Final de Calidad", f"{points} / 5")
+                c2.error("FALLO")
+        st.metric("Puntuación de Calidad", f"{points} / 5")
 
     with t_multiples:
-        st.subheader("Análisis de Márgenes y Múltiplos")
-        m_col1, m_col2 = st.columns(2)
-        
-        with m_col1:
-            st.write("**Márgenes Operativos**")
-            st.progress(info.get('grossMargins', 0), text=f"M. Bruto: {info.get('grossMargins', 0)*100:.1f}%")
-            st.progress(info.get('ebitdaMargins', 0), text=f"M. EBITDA: {info.get('ebitdaMargins', 0)*100:.1f}%")
-            st.progress(info.get('profitMargins', 0), text=f"M. Neto: {info.get('profitMargins', 0)*100:.1f}%")
-        
-        with m_col2:
-            st.write("**Comparativa PER**")
-            per_h = info.get('trailingPE', 0)
-            avg_5y = 25 # Proxy de media sectorial
-            st.metric("PER vs Media (Est.)", f"{per_h:.2f}", delta=f"{per_h - avg_5y:.2f}", delta_color="inverse")
+        st.subheader("Márgenes Operativos")
+        st.progress(info.get('grossMargins', 0), text=f"Margen Bruto: {info.get('grossMargins', 0)*100:.1f}%")
+        st.progress(info.get('ebitdaMargins', 0), text=f"Margen EBITDA: {info.get('ebitdaMargins', 0)*100:.1f}%")
+        st.progress(info.get('profitMargins', 0), text=f"Margen Neto: {info.get('profitMargins', 0)*100:.1f}%")
+
+    with t_charts:
+        st.subheader("Evolución de Ingresos y Beneficios")
+        # Obtenemos datos anuales
+        income_stmt = stock.financials.T
+        if not income_stmt.empty:
+            chart_data = income_stmt[['Total Revenue', 'Net Income']].sort_index()
+            st.bar_chart(chart_data)
+            
+        else:
+            st.warning("Datos financieros históricos no disponibles para este ticker.")
 
     # --- 6. VEREDICTO FINAL ---
     st.divider()
@@ -125,12 +131,11 @@ try:
     margin = ((objetivo_final / price) - 1) * 100
     
     if margin > 20 and points >= 4:
-        st.markdown(f"<div class='status-box good'><h3>🚀 COMPRA FUERTE</h3>Potencial: {margin:.1f}% | Calidad: {points}/5<br>La empresa tiene infravaloración y fundamentos sólidos.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='status-box good'><h3>🚀 COMPRA FUERTE</h3>Potencial: {margin:.1f}% | Calidad: {points}/5</div>", unsafe_allow_html=True)
     elif margin > 0:
-        st.markdown(f"<div class='status-box neutral'><h3>⚖️ MANTENER / PRECIO JUSTO</h3>Potencial: {margin:.1f}%<br>El precio actual refleja bien el valor del negocio.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='status-box neutral'><h3>⚖️ MANTENER</h3>Potencial: {margin:.1f}%</div>", unsafe_allow_html=True)
     else:
-        st.markdown(f"<div class='status-box bad'><h3>⚠️ SOBREVALORADA</h3>Potencial: {margin:.1f}%<br>Riesgo de caída alto. No hay margen de seguridad.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='status-box bad'><h3>⚠️ SOBREVALORADA</h3>Potencial: {margin:.1f}%</div>", unsafe_allow_html=True)
 
 except Exception as e:
-    st.error("Error en el análisis. Verifica el Ticker.")
-    st.write(e)
+    st.error(f"Error en el análisis: {e}")
