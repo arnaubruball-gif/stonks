@@ -19,22 +19,21 @@ st.markdown("""
 
 # --- 2. FUNCIONES DE CÁLCULO ---
 def calcular_dcf(fcf, g1, gp, k, debt, cash, shares):
-    """Función limpia para evitar errores de sintaxis en la matriz"""
     if k <= gp or shares <= 0: return 0
-    # Fase 1 (5 años)
     fcf_list = [fcf * (1 + g1)**i for i in range(1, 6)]
     fcf_d = sum([f / (1 + k)**i for i, f in enumerate(fcf_list, 1)])
-    # Fase 2 (Terminal)
     tv = (fcf_list[-1] * (1 + gp)) / (k - gp)
     tv_d = tv / (1 + k)**5
     return (fcf_d + tv_d - debt + cash) / shares
 
 @st.cache_data
-def get_extended_data(ticker):
-    stock = yf.Ticker(ticker)
+def get_extended_data(ticker_symbol):
+    # Extraemos solo los datos serializables
+    stock = yf.Ticker(ticker_symbol)
     info = stock.info
-    hist = stock.history(period="5y")
-    return stock, info, hist
+    # Convertimos los financieros a DataFrames limpios para el caché
+    financials = stock.financials.to_dict() if not stock.financials.empty else {}
+    return info, financials
 
 # --- 3. SIDEBAR ---
 LOGO_URL = "https://cdn-icons-png.flaticon.com/512/3310/3310111.png"
@@ -43,99 +42,93 @@ st.sidebar.title("Pro Analyzer v3.0")
 ticker = st.sidebar.text_input("Ticker", "NVDA").upper()
 
 try:
-    stock, info, hist = get_extended_data(ticker)
+    info, financials_dict = get_extended_data(ticker)
     
     st.sidebar.divider()
     g_f1 = st.sidebar.slider("Crecimiento Etapa 1 (%)", 0.0, 60.0, 25.0) / 100
     k = st.sidebar.slider("Tasa Descuento (k) %", 5.0, 15.0, 9.0) / 100
-    g_p = 0.02 # Crecimiento perpetuo
+    g_p = 0.02
 
     # --- 4. HEADER ---
     st.title(f"{info.get('longName', ticker)}")
     col_h1, col_h2, col_h3, col_h4 = st.columns(4)
     price = info.get('currentPrice', 1)
-    col_h1.metric("Precio", f"{price} {info.get('currency')}")
+    col_h1.metric("Precio", f"{price} {info.get('currency', 'USD')}")
     col_h2.metric("Market Cap", f"{info.get('marketCap', 0)/1e9:.2f}B")
     col_h3.metric("PER Actual", f"{info.get('trailingPE', 0):.2f}")
     col_h4.metric("ROE", f"{info.get('returnOnEquity', 0)*100:.1f}%")
 
-    # --- 5. MODELOS DE ANÁLISIS ---
-    t_val, t_quality, t_multiples, t_charts = st.tabs(["💎 Valoración", "🛡️ Calidad (Piotroski)", "📊 Márgenes", "📈 Histórico"])
+    # --- 5. MODELOS ---
+    t_val, t_quality, t_charts = st.tabs(["💎 Valoración", "🛡️ Calidad", "📈 Histórico"])
 
     with t_val:
+        # Recuperación robusta de FCF
         fcf_actual = info.get('freeCashflow') or info.get('operatingCashflow', 0) * 0.8
         debt = info.get('totalDebt', 0)
         cash = info.get('totalCash', 0)
         shares = info.get('sharesOutstanding', 1)
         
-        # DCF Proyectado
         val_dcf = calcular_dcf(fcf_actual, g_f1, g_p, k, debt, cash, shares)
-        
-        # Modelo Graham
         eps = info.get('trailingEps', 0)
         val_graham = (eps * (8.5 + 2 * (g_f1 * 100)) * 4.4) / 4.5
         
         v1, v2 = st.columns(2)
-        v1.metric("Valor DCF (Caja)", f"{val_dcf:.2f}")
-        v2.metric("Valor Graham (EPS)", f"{val_graham:.2f}")
+        v1.metric("Valor DCF", f"{val_dcf:.2f}")
+        v2.metric("Valor Graham", f"{val_graham:.2f}")
         
-        st.write("### 📉 Matriz de Sensibilidad (DCF)")
+        st.write("### 📉 Matriz de Sensibilidad")
         sk = [k-0.01, k, k+0.01]
         sg = [g_f1-0.05, g_f1, g_f1+0.05]
-        
-        # Matriz generada con la función limpia
         m_list = [[calcular_dcf(fcf_actual, gi, g_p, ki, debt, cash, shares) for gi in sg] for ki in sk]
-        df_sens = pd.DataFrame(m_list, columns=[f"G:{g*100:.0f}%" for g in sg], index=[f"k:{k*100:.1f}%" for ki in sk])
+        df_sens = pd.DataFrame(m_list, columns=[f"G:{g*100:.0f}%" for g in sg], index=[f"k:{k*100:.1f}%" for k in sk])
         st.table(df_sens.style.background_gradient(cmap='RdYlGn').format("{:.2f}"))
 
     with t_quality:
-        st.subheader("Checklist de Salud Financiera")
+        st.subheader("F-Score de Calidad (Piotroski)")
+        
         points = 0
         checks = {
-            "Rentabilidad Neta Positiva": info.get('returnOnAssets', 0) > 0,
-            "Flujo de Caja Operativo Positivo": fcf_actual > 0,
-            "ROE > 15% (Foso Competitivo)": info.get('returnOnEquity', 0) > 0.15,
-            "Margen Bruto > 40% (Pricing Power)": info.get('grossMargins', 0) > 0.40,
-            "Liquidez (Current Ratio) > 1.5": info.get('currentRatio', 0) > 1.5
+            "Rentabilidad Positiva": info.get('returnOnAssets', 0) > 0,
+            "Caja Operativa Positiva": fcf_actual > 0,
+            "ROE > 15%": info.get('returnOnEquity', 0) > 0.15,
+            "Margen Bruto > 40%": info.get('grossMargins', 0) > 0.40,
+            "Liquidez > 1.5": info.get('currentRatio', 0) > 1.5
         }
         for text, result in checks.items():
             c1, c2 = st.columns([3, 1])
             c1.write(text)
             if result:
-                c2.success("PASADO")
+                c2.success("SI")
                 points += 1
             else:
-                c2.error("FALLO")
-        st.metric("Puntuación de Calidad", f"{points} / 5")
-
-    with t_multiples:
-        st.subheader("Márgenes Operativos")
-        st.progress(info.get('grossMargins', 0), text=f"Margen Bruto: {info.get('grossMargins', 0)*100:.1f}%")
-        st.progress(info.get('ebitdaMargins', 0), text=f"Margen EBITDA: {info.get('ebitdaMargins', 0)*100:.1f}%")
-        st.progress(info.get('profitMargins', 0), text=f"Margen Neto: {info.get('profitMargins', 0)*100:.1f}%")
+                c2.error("NO")
+        st.metric("Puntuación Final", f"{points} / 5")
 
     with t_charts:
-        st.subheader("Evolución de Ingresos y Beneficios")
-        # Obtenemos datos anuales
-        income_stmt = stock.financials.T
-        if not income_stmt.empty:
-            chart_data = income_stmt[['Total Revenue', 'Net Income']].sort_index()
-            st.bar_chart(chart_data)
-            
+        st.subheader("Ingresos vs Beneficios")
+        if financials_dict:
+            df_fin = pd.DataFrame(financials_dict).T
+            if 'Total Revenue' in df_fin.columns and 'Net Income' in df_fin.columns:
+                chart_data = df_fin[['Total Revenue', 'Net Income']].sort_index()
+                st.bar_chart(chart_data)
+                
+            else:
+                st.warning("No hay datos suficientes para el gráfico.")
         else:
-            st.warning("Datos financieros históricos no disponibles para este ticker.")
+            st.warning("No se pudieron cargar datos históricos.")
 
-    # --- 6. VEREDICTO FINAL ---
+    # --- 6. VEREDICTO ---
     st.divider()
-    objetivo_final = (val_dcf * 0.7) + (val_graham * 0.3)
-    margin = ((objetivo_final / price) - 1) * 100
+    objetivo = (val_dcf * 0.7) + (val_graham * 0.3)
+    margin = ((objetivo / price) - 1) * 100
     
     if margin > 20 and points >= 4:
-        st.markdown(f"<div class='status-box good'><h3>🚀 COMPRA FUERTE</h3>Potencial: {margin:.1f}% | Calidad: {points}/5</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='status-box good'><h3>🚀 COMPRA FUERTE</h3>Potencial: {margin:.1f}% | Salud: {points}/5</div>", unsafe_allow_html=True)
     elif margin > 0:
         st.markdown(f"<div class='status-box neutral'><h3>⚖️ MANTENER</h3>Potencial: {margin:.1f}%</div>", unsafe_allow_html=True)
     else:
         st.markdown(f"<div class='status-box bad'><h3>⚠️ SOBREVALORADA</h3>Potencial: {margin:.1f}%</div>", unsafe_allow_html=True)
 
 except Exception as e:
-    st.error(f"Error en el análisis: {e}")
+    st.error(f"Error en el análisis. Intenta con otro Ticker o revisa tu conexión.")
+    st.write(f"Detalle: {e}")
