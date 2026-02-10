@@ -1,5 +1,6 @@
 streamlit
-yfinance
 pandas
-numpy
+wbgapi
 plotly
+numpy
+pandas_datareader
