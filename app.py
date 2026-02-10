@@ -1,87 +1,66 @@
-import streamlit as st
-import pandas as pd
-import wbgapi as wb
-import plotly.express as px
-import yfinance as yf
-from datetime import datetime, timedelta
+# --- Pestañas Actualizadas ---
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🏭 Producción", 
+    "💼 Trabajo", 
+    "💰 Finanzas", 
+    "🚨 Alertas de Recesión",
+    "📈 Expectativas Diferencial"
+])
 
-st.set_page_config(page_title="Macro Strategist Hub", layout="wide")
+# (Las pestañas 1, 2, 3 y 4 se mantienen con el código anterior)
 
-# --- Configuración de Indicadores ---
-indicadores_wb = {
-    'Producción': {'NY.GDP.MKTP.KD.ZG': 'Crecimiento PIB (%)', 'NV.IND.TOTL.ZS': 'Valor Ind. (% PIB)'},
-    'Trabajo': {'SL.UEM.TOTL.ZS': 'Desempleo (%)', 'SL.TLF.CACT.ZS': 'Tasa Participación (%)'},
-    'Finanzas': {'FP.CPI.TOTL.ZG': 'Inflación (%)', 'GC.DOD.TOTL.GD.ZS': 'Deuda Pública (% PIB)'}
-}
+# --- NUEVA PESTAÑA: EXPECTATIVAS ---
+with tab5:
+    st.header("Expectativas de Política Monetaria")
+    st.markdown("""
+    Esta sección calcula el **Diferencial de Tipos Reales** proyectado. 
+    Un diferencial positivo indica que los tipos están por encima de la inflación (atractivo para inversores), 
+    mientras que uno negativo indica pérdida de poder adquisitivo.
+    """)
 
-st.title("🏛️ Dashboard Macro: Análisis Sectorial")
+    col_input, col_graph = st.columns([1, 2])
 
-# Sidebar
-paises = st.sidebar.multiselect("Países", ["USA", "ESP", "DEU", "FRA", "CHN"], default=["USA", "ESP"])
+    with col_input:
+        st.subheader("Parámetros de Proyección")
+        pais_sel = st.selectbox("Seleccionar País para proyecciones", paises)
+        
+        # Obtenemos datos actuales para la base
+        inf_actual = data[(data['economy'] == pais_sel) & (data['Indicador'] == 'Inflación (%)')]['Valor'].iloc[-1]
+        
+        tipo_nom_manual = st.number_input(f"Tipo Interés Nominal actual ({pais_sel}) %", value=5.25)
+        expectativa_inflacion = st.slider("Expectativa de Inflación a 12 meses (%)", 
+                                          min_value=-2.0, max_value=20.0, value=float(inf_actual))
+        
+        meses = st.number_input("Horizonte temporal (meses)", min_value=1, max_value=24, value=12)
 
-# --- Lógica de Datos ---
-@st.cache_data
-def get_macro_data(codes, countries):
-    df = wb.data.DataFrame(codes, countries, mrv=10).reset_index()
-    df = pd.melt(df, id_vars=['economy', 'series'], var_name='Año', value_name='Valor')
-    df['Año'] = df['Año'].str.replace('YR', '').astype(int)
-    return df
+    with col_graph:
+        # Simulación de trayectoria
+        meses_lista = list(range(meses + 1))
+        # Trayectoria lineal desde inflación actual a la esperada
+        trayectoria_inf = np.linspace(inf_actual, expectativa_inflacion, meses + 1)
+        diferenciales = tipo_nom_manual - trayectoria_inf
+        
+        df_proj = pd.DataFrame({
+            'Mes': meses_lista,
+            'Inflación Proyectada': trayectoria_inf,
+            'Diferencial Real (Tipo - Inf)': diferenciales
+        })
 
-# --- Pestañas ---
-tab1, tab2, tab3, tab4 = st.tabs(["🏭 Producción", "💼 Trabajo", "💰 Finanzas", "🚨 Alertas de Recesión"])
+        fig_proj = px.line(df_proj, x='Mes', y=['Inflación Proyectada', 'Diferencial Real (Tipo - Inf)'],
+                          title=f"Proyección de Diferencial Real para {pais_sel}",
+                          labels={'value': 'Porcentaje (%)', 'variable': 'Indicador'},
+                          color_discrete_map={
+                              'Inflación Proyectada': '#EF553B',
+                              'Diferencial Real (Tipo - Inf)': '#00CC96'
+                          })
+        
+        # Añadir línea de equilibrio en 0
+        fig_proj.add_hline(y=0, line_dash="dash", line_color="white", annotation_text="Punto de Equilibrio")
+        
+        st.plotly_chart(fig_proj, use_container_width=True)
 
-with tab1:
-    st.header("Indicadores de Producción y Crecimiento")
-    codes = list(indicadores_wb['Producción'].keys())
-    data = get_macro_data(codes, paises)
-    data['Indicador'] = data['series'].map(indicadores_wb['Producción'])
-    fig = px.line(data, x='Año', y='Valor', color='economy', facet_col='Indicador', markers=True)
-    st.plotly_chart(fig, use_container_width=True)
-
-with tab2:
-    st.header("Mercado Laboral")
-    codes = list(indicadores_wb['Trabajo'].keys())
-    data = get_macro_data(codes, paises)
-    data['Indicador'] = data['series'].map(indicadores_wb['Trabajo'])
-    fig = px.bar(data, x='Año', y='Valor', color='economy', barmode='group', facet_row='Indicador')
-    st.plotly_chart(fig, use_container_width=True)
-
-with tab3:
-    st.header("Estabilidad Financiera e Inflación")
-    col_a, col_b = st.columns(2)
-    codes = list(indicadores_wb['Finanzas'].keys())
-    data = get_macro_data(codes, paises)
-    data['Indicador'] = data['series'].map(indicadores_wb['Finanzas'])
-    
-    with col_a:
-        st.subheader("Inflación Anual")
-        fig_inf = px.line(data[data['Indicador']=='Inflación (%)'], x='Año', y='Valor', color='economy')
-        st.plotly_chart(fig_inf)
-    with col_b:
-        st.subheader("Deuda Pública sobre PIB")
-        fig_deuda = px.bar(data[data['Indicador']=='Deuda Pública (% PIB)'], x='Año', y='Valor', color='economy')
-        st.plotly_chart(fig_deuda)
-
-with tab4:
-    st.header("Señales de Alerta Temprana")
-    st.info("La inversión de la curva de tipos (10Y - 2Y) suele preceder a una recesión.")
-    
-    # Obtener Bonos de USA via Yahoo Finance
-    try:
-        if "USA" in paises:
-            bonos = yf.download(['^TNX', '^IRX'], start=(datetime.now() - timedelta(days=365)))['Close']
-            # ^TNX = 10Y, ^IRX = 13-week o aproximamos con 2Y si prefieres el ticker '^TYX'
-            diff = bonos['^TNX'] - bonos['^IRX']
-            
-            fig_yield = px.area(diff, title="Diferencial de Tipos USA (10Y - 3M)", 
-                               labels={'value': 'Spread (%)', 'Date': 'Fecha'})
-            st.plotly_chart(fig_yield, use_container_width=True)
-            
-            if diff.iloc[-1] < 0:
-                st.error(f"🔴 **CURVA INVERTIDA**: El diferencial es de {diff.iloc[-1]:.2f}%. Riesgo de recesión elevado.")
-            else:
-                st.success(f"🟢 Curva normalizada: {diff.iloc[-1]:.2f}%")
-        else:
-            st.warning("Selecciona 'USA' para ver el indicador de recesión por diferencial de bonos.")
-    except Exception as e:
-        st.error(f"Error al obtener datos de bonos: {e}")
+    # Nota explicativa sobre el impacto
+    if diferenciales[-1] > 0:
+        st.success(f"Análisis: En {meses} meses, con un diferencial de {diferenciales[-1]:.2f}%, la moneda de {pais_sel} tendería a fortalecerse frente a divisas con tipos reales negativos.")
+    else:
+        st.warning(f"Análisis: Un diferencial de {diferenciales[-1]:.2f}% sugiere que los tipos no compensan la inflación. Riesgo de fuga de capitales o debilidad de la divisa.")
