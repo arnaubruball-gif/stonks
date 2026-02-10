@@ -2,5 +2,5 @@ streamlit
 pandas
 wbgapi
 plotly
+yfinance
 numpy
-pandas_datareader
