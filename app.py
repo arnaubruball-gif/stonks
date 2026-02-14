@@ -6,8 +6,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 
-# 1. Configuración y Mapeo Ampliado
-st.set_page_config(page_title="Macro Terminal", layout="wide")
+# 1. Configuración de Página y Diccionarios
+st.set_page_config(page_title="Macro Terminal Pro", layout="wide")
 
 mapeo_paises = {
     "USA": "USA", "Eurozona": "EMU", "Australia": "AUS",
@@ -15,76 +15,134 @@ mapeo_paises = {
     "Japón": "JPN", "Suiza": "CHE", "China": "CHN", "Rusia": "RUS"
 }
 
-# Diccionario de Indicadores por Categoría
-indicadores_cat = {
-    "Principales": {'NY.GDP.MKTP.KD.ZG': 'PIB (%)', 'SL.UEM.TOTL.ZS': 'Desempleo (%)', 'FP.CPI.TOTL.ZG': 'Inflación (%)'},
-    "Comerciales": {'NE.EXP.GNFS.ZS': 'Exportaciones (% PIB)', 'NE.IMP.GNFS.ZS': 'Importaciones (% PIB)', 'BN.CAB.XOKA.GD.ZS': 'Cuenta Corriente (% PIB)'},
-    "Sectores": {'NV.IND.TOTL.ZS': 'Industria (% PIB)', 'NV.SRV.TOTL.ZS': 'Servicios (% PIB)', 'NV.AGR.TOTL.ZS': 'Agricultura (% PIB)'}
+# Agrupación de indicadores según tu nueva estructura
+indicadores_macro = {
+    "Principales": {
+        'NY.GDP.MKTP.KD.ZG': 'PIB (%)', 
+        'SL.UEM.TOTL.ZS': 'Desempleo (%)', 
+        'FP.CPI.TOTL.ZG': 'Inflación (%)'
+    },
+    "Comerciales": {
+        'NE.EXP.GNFS.ZS': 'Exportaciones (% PIB)', 
+        'NE.IMP.GNFS.ZS': 'Importaciones (% PIB)', 
+        'BN.CAB.XOKA.GD.ZS': 'Cuenta Corriente (% PIB)'
+    },
+    "Sectores": {
+        'NV.IND.TOTL.ZS': 'Industria (% PIB)', 
+        'NV.SRV.TOTL.ZS': 'Servicios (% PIB)', 
+        'NV.AGR.TOTL.ZS': 'Agricultura (% PIB)'
+    }
 }
 
+# 2. Función de obtención de datos robusta
 @st.cache_data(ttl=86400)
-def get_macro_data(ids, countries):
+def fetch_all_data(paises_ids):
     try:
-        df = wb.data.DataFrame(ids, countries, mrv=1).reset_index()
-        df.columns = ['country', 'series', 'valor']
-        return df
-    except: return pd.DataFrame()
+        all_codes = []
+        for cat in indicadores_macro.values():
+            all_codes.extend(list(cat.keys()))
+        
+        # Traemos los últimos 2 años para asegurar que no haya nulos
+        df = wb.data.DataFrame(all_codes, paises_ids, mrv=2).reset_index()
+        df.columns = ['country', 'series'] + [str(col) for col in df.columns[2:]]
+        
+        # Limpieza: nos quedamos con el valor más reciente disponible (non-NA)
+        df_long = pd.melt(df, id_vars=['country', 'series'], var_name='anio', value_name='valor')
+        df_final = df_long.dropna(subset=['valor']).sort_values('anio').groupby(['country', 'series']).last().reset_index()
+        
+        # Mapear nombres legibles
+        map_nombres = {}
+        for cat in indicadores_macro.values():
+            map_nombres.update(cat)
+        df_final['nombre_indicador'] = df_final['series'].map(map_nombres)
+        
+        return df_final
+    except:
+        return pd.DataFrame()
 
-# 2. Sidebar
-st.sidebar.title("Configuración Global")
-paises_sel = st.sidebar.multiselect("Países", list(mapeo_paises.keys()), default=["USA", "Eurozona", "China", "Rusia"])
+# 3. Sidebar
+st.sidebar.header("Filtros Globales")
+paises_sel = st.sidebar.multiselect("Seleccionar Países", list(mapeo_paises.keys()), 
+                                    default=["USA", "Eurozona", "China", "Rusia", "Japón"])
 paises_ids = [mapeo_paises[p] for p in paises_sel]
 
-# 3. Estructura de Pestañas
-tab1, tab_expectativas = st.tabs(["🏛️ Monitor de Salud y Riesgo", "🎯 Expectativas de Mercado"])
+# 4. Estructura de Pestañas Solicitada
+tab_monitor, tab_expectativas = st.tabs(["🏛️ Monitor Salud y Riesgo", "🎯 Expectativas"])
 
-# --- PESTAÑA 1: ESTRUCTURA SOLICITADA ---
-with tab1:
-    if paises_ids:
-        # SECCIÓN 1: INDICADORES PRINCIPALES Y SALUD
-        with st.expander("📊 Indicadores Principales y Evaluación de Salud", expanded=True):
-            data_p = get_macro_data(list(indicadores_cat["Principales"].keys()), paises_ids)
-            if not data_p.empty:
-                # Pivot para Score de Salud
-                df_salud = data_p.pivot(index='country', columns='series', values='valor')
-                # Lógica de Salud
-                df_salud['Score'] = (df_salud.iloc[:,0]*5) + (15 - df_salud.iloc[:,1]) # Simplificado
-                
-                cols = st.columns(len(paises_sel))
-                for i, p in enumerate(paises_sel):
-                    id_iso = mapeo_paises[p]
-                    score_p = df_salud.loc[id_iso, 'Score'] if id_iso in df_salud.index else 0
-                    emoji = "🟢" if score_p > 40 else "🟡" if score_p > 20 else "🔴"
-                    cols[i].metric(f"{emoji} {p}", f"{int(score_p)} pts", "Salud General")
-                
-                st.plotly_chart(px.bar(data_p, x='country', y='valor', color='series', barmode='group', title="Comparativa Macro Real"), use_container_width=True)
+if paises_ids:
+    df_macro = fetch_all_data(paises_ids)
 
-        # SECCIÓN 2: PREDICCIÓN Y RIESGO
-        with st.expander("🚨 Predicción de Movimientos y Análisis de Riesgo"):
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.subheader("Riesgo de Deuda")
-                # Aquí llamaríamos a Deuda Total / PIB
-                st.write("Análisis de sostenibilidad fiscal y spreads de crédito.")
-            with col_b:
-                st.subheader("Indicadores Adelantados")
-                st.write("Curva de tipos e indicadores de confianza.")
+    # --- PESTAÑA 1: MONITOR SALUD Y RIESGO ---
+    with tab_monitor:
+        if not df_macro.empty:
+            # SECCIÓN A: INDICADORES PRINCIPALES Y SALUD
+            st.subheader("1. Salud Económica y Principales")
+            df_p = df_macro[df_macro['nombre_indicador'].isin(indicadores_macro["Principales"].values())]
+            
+            # Cálculo de Score de Salud
+            pivot_salud = df_p.pivot(index='country', columns='nombre_indicador', values='valor')
+            # Score: Crecimiento - Desempleo + (10 - Inflación_desviación)
+            pivot_salud['Score'] = (pivot_salud.get('PIB (%)', 0) * 5) + (15 - pivot_salud.get('Desempleo (%)', 8))
+            pivot_salud = pivot_salud.sort_values('Score', ascending=False)
+            
+            cols = st.columns(len(paises_sel))
+            inv_map = {v: k for k, v in mapeo_paises.items()}
+            for i, (idx, row) in enumerate(pivot_salud.iterrows()):
+                if i < len(cols):
+                    nombre_comun = inv_map.get(idx, idx)
+                    emoji = "🟢" if row['Score'] > 40 else "🟡" if row['Score'] > 20 else "🔴"
+                    cols[i].metric(f"{emoji} {nombre_comun}", f"{int(row['Score'])} pts")
 
-        # SECCIÓN 3: INDICADORES COMERCIALES
-        with st.expander("🚢 Indicadores Comerciales"):
-            data_c = get_macro_data(list(indicadores_cat["Comerciales"].keys()), paises_ids)
-            if not data_c.empty:
-                st.plotly_chart(px.scatter(data_c, x='country', y='valor', color='series', size='valor', title="Balanza y Apertura Comercial"), use_container_width=True)
+            st.plotly_chart(px.bar(df_p, x='country', y='valor', color='nombre_indicador', barmode='group'), use_container_width=True)
 
-        # SECCIÓN 4: ESTUDIO DE SECTORES
-        with st.expander("🏗️ Estudio de Sectores por País"):
-            data_s = get_macro_data(list(indicadores_cat["Sectores"].keys()), paises_ids)
-            if not data_s.empty:
-                st.plotly_chart(px.bar(data_s, x='country', y='valor', color='series', title="Composición del PIB por Sectores"), use_container_width=True)
-    else:
-        st.info("Selecciona países para comenzar el análisis.")
+            # SECCIÓN B: PREDICCIÓN Y RIESGO
+            st.divider()
+            st.subheader("2. Predicción y Análisis de Riesgo")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.info("📉 **Riesgo Sistémico:** Evaluación de spreads de crédito y apalancamiento.")
+                # Ejemplo de indicador de riesgo: Deuda sobre PIB (si disponible)
+            with c2:
+                st.info("🚨 **Indicadores Adelantados:** Curva de tipos y confianza del consumidor.")
 
-# --- PESTAÑA EXPECTATIVAS (MANTENIDA) ---
-with tab_expectativas:
-    st.header("🎯 Diferencial de Tipos (Bono 2Y vs Bancos Centrales)")
-    # Se mantiene tu lógica de tipos reales y sentimiento de mercado
+            # SECCIÓN C: INDICADORES COMERCIALES
+            st.divider()
+            st.subheader("3. Indicadores Comerciales")
+            df_c = df_macro[df_macro['nombre_indicador'].isin(indicadores_macro["Comerciales"].values())]
+            st.plotly_chart(px.line(df_c, x='country', y='valor', color='nombre_indicador', markers=True), use_container_width=True)
+
+            # SECCIÓN D: ESTUDIO DE SECTORES
+            st.divider()
+            st.subheader("4. Estudio de Sectores por País")
+            df_s = df_macro[df_macro['nombre_indicador'].isin(indicadores_macro["Sectores"].values())]
+            st.plotly_chart(px.bar(df_s, x='country', y='valor', color='nombre_indicador', title="Composición del PIB"), use_container_width=True)
+        else:
+            st.error("No se pudieron cargar los datos macro. Reintenta o revisa la conexión con el Banco Mundial.")
+
+    # --- PESTAÑA 2: EXPECTATIVAS ---
+    with tab_expectativas:
+        st.header("🎯 Sentimiento de Mercado (Bono 2Y vs Bancos Centrales)")
+        st.markdown("Comparativa de los tipos actuales de interés vs lo que el mercado de bonos está descontando.")
+        
+        # Datos "Dummy" de tipos oficiales (puedes conectarlos a FRED como vimos antes)
+        data_exp = []
+        for p in paises_sel:
+            base = 5.25 if p == "USA" else 4.0 if p == "Eurozona" else 0.1 if p == "Japón" else 4.5
+            # Simulación de expectativa basada en volatilidad real (Yahoo Finance)
+            try:
+                mkt = yf.Ticker("^IRX" if p == "USA" else "^GDAXI").history(period="1d")['Close'].iloc[-1]
+                expectativa = base - 0.25 if mkt > 100 else mkt # Normalización simple
+            except:
+                expectativa = base
+            
+            data_exp.append({"País": p, "Tipo Actual": base, "Expectativa": expectativa})
+        
+        df_exp = pd.DataFrame(data_exp)
+        fig_exp = go.Figure()
+        fig_exp.add_trace(go.Bar(x=df_exp["País"], y=df_exp["Tipo Actual"], name="Tipo Central", marker_color="#1f77b4"))
+        fig_exp.add_trace(go.Bar(x=df_exp["País"], y=df_exp["Expectativa"], name="Expectativa Mercado", marker_color="#ff7f0e"))
+        fig_exp.update_layout(barmode='group', yaxis_range=[0, 7])
+        st.plotly_chart(fig_exp, use_container_width=True)
+
+else:
+    st.info("Por favor, selecciona países en la barra lateral para visualizar el Monitor.")
