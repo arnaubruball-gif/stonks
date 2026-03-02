@@ -4,18 +4,28 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-import scipy.stats as stats # Necesaria para la curva de densidad
+import scipy.stats as stats
+from datetime import datetime
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Alpha Quant Terminal Pro", layout="wide")
+st.set_page_config(page_title="Quant Intelligence Terminal", layout="wide")
 
+# Estilos CSS para un look de Terminal Bloomberg/Reuters
 st.markdown("""
     <style>
-    .stMetric { background-color: #11151c; border: 1px solid #30363d; padding: 15px; border-radius: 10px; }
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] { background-color: #11151c; border-radius: 5px; color: #888; }
-    .stTabs [data-baseweb="tab"]:hover { color: white; }
-    .stTabs [aria-selected="true"] { color: #00ffcc !important; border-bottom: 2px solid #00ffcc !important; }
+    .stMetric { background-color: #0d1117; border: 1px solid #30363d; padding: 20px; border-radius: 12px; }
+    .stTabs [data-baseweb="tab-list"] { gap: 12px; }
+    .stTabs [data-baseweb="tab"] { 
+        background-color: #0d1117; 
+        border-radius: 8px 8px 0px 0px; 
+        padding: 10px 20px;
+        color: #8b949e;
+    }
+    .stTabs [aria-selected="true"] { 
+        background-color: #161b22 !important; 
+        color: #58a6ff !important; 
+        border-bottom: 2px solid #58a6ff !important; 
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -23,19 +33,12 @@ st.markdown("""
 assets_dict = {
     "Currencies": {"Dólar Index": "DX-Y.NYB", "EUR/USD": "EURUSD=X", "USD/JPY": "JPY=X", "GBP/USD": "GBPUSD=X"},
     "Indices": {"S&P 500": "^GSPC", "Nasdaq 100": "^IXIC", "DAX 40": "^GDAXI", "Nikkei 225": "^N225"},
-    "Commodities": {"Oro": "GC=F", "Petróleo WTI": "CL=F", "Cobre": "HG=F"},
+    "Commodities": {"Oro": "GC=F", "Petróleo WTI": "CL=F", "Cobre": "HG=F", "Gas Natural": "NG=F"},
     "Bonds": {"Bono 10Y USA": "^TNX", "Bono 2Y USA": "^ZT=F"},
     "Crypto": {"Bitcoin": "BTC-USD", "Ethereum": "ETH-USD"}
 }
 
-# --- FUNCIONES ---
-def calculate_hurst(series):
-    if len(series) < 50: return 0.5
-    lags = range(2, 20)
-    tau = [np.sqrt(np.std(np.subtract(series[lag:], series[:-lag]))) for lag in lags]
-    poly = np.polyfit(np.log(lags), np.log(tau), 1)
-    return poly[0] * 2.0
-
+# --- MOTOR CUANTITATIVO ---
 @st.cache_data(ttl=60)
 def get_full_data(ticker_id, t):
     p_map = {"15m": "5d", "1h": "30d", "4h": "60d", "1d": "2y"}
@@ -43,113 +46,146 @@ def get_full_data(ticker_id, t):
     if df.empty: return None
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     
-    # Indicadores
+    # Indicadores Base
     df['SMA20'] = df['Close'].rolling(20).mean()
     df['Std'] = df['Close'].rolling(20).std()
     df['Z-Score'] = (df['Close'] - df['SMA20']) / df['Std']
     df['Returns'] = df['Close'].pct_change()
     df['Vol_Anual'] = df['Returns'].rolling(20).std() * np.sqrt(252) * 100
-    df['RSI'] = 100 - (100 / (1 + (df['Returns'].where(df['Returns']>0,0).rolling(14).mean() / -df['Returns'].where(df['Returns']<0,0).rolling(14).mean())))
+    
+    # RSI Avanzado
+    up = df['Returns'].clip(lower=0)
+    down = -1 * df['Returns'].clip(upper=0)
+    ema_up = up.ewm(com=13, adjust=False).mean()
+    ema_down = down.ewm(com=13, adjust=False).mean()
+    df['RSI'] = 100 - (100 / (1 + (ema_up/ema_down)))
+    
     if 'Volume' in df.columns:
         df['RVOL'] = df['Volume'] / df['Volume'].rolling(20).mean()
     return df
 
 # --- SIDEBAR ---
-st.sidebar.title("💎 Quant Selector")
+st.sidebar.title("📑 Asset Intelligence")
 cat = st.sidebar.selectbox("Categoría", list(assets_dict.keys()))
 nombre_activo = st.sidebar.selectbox("Activo", list(assets_dict[cat].keys()))
 ticker = assets_dict[cat][nombre_activo]
-temp = st.sidebar.selectbox("Temporalidad", ["15m", "1h", "4h", "1d"], index=3)
+temp = st.sidebar.selectbox("Temporalidad", ["15m", "1h", "4h", "1d"], index=2)
 
 data = get_full_data(ticker, temp)
 
 if data is not None:
-    # --- HEADER ---
     last_price = data['Close'].iloc[-1]
-    st.title(f"📈 {nombre_activo} | Terminal Intelligence")
+    z_actual = data['Z-Score'].iloc[-1]
+    rsi_actual = data['RSI'].iloc[-1]
     
+    st.title(f"🚀 {nombre_activo} Intelligence Dashboard")
+    
+    # 1. HEADER MÉTRICAS
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Precio", f"{last_price:.4f}", f"{data['Returns'].iloc[-1]*100:.2f}%")
-    m2.metric("Z-Score (Desviación)", f"{data['Z-Score'].iloc[-1]:.2f} σ")
-    m3.metric("RSI (Sentimiento)", f"{data['RSI'].iloc[-1]:.1f}")
-    m4.metric("Vol. Realizada", f"{data['Vol_Anual'].iloc[-1]:.1f}%")
+    m1.metric("Market Price", f"{last_price:.4f}", f"{data['Returns'].iloc[-1]*100:.2f}%")
+    m2.metric("Z-Score (σ)", f"{z_actual:.2f}")
+    m3.metric("RSI (14)", f"{rsi_actual:.1f}")
+    m4.metric("Vol. Anualizada", f"{data['Vol_Anual'].iloc[-1]:.1f}%")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Gráfico Técnico", "🧬 Curva de Probabilidad", "🎯 Niveles Camarilla", "🚀 Alpha Quant Metrics"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Gráfico", "🧬 Probabilidad & Pricing", "🎯 Camarilla", "🚀 Alpha Quant"])
 
     with tab1:
         fig = go.Figure()
-        fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name="Precio"))
-        fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], line=dict(color='#ff9900', width=1.5), name="Media 20p"))
-        fig.update_layout(height=550, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10,r=10,t=10,b=10))
+        fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name="Price"))
+        fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], line=dict(color='#58a6ff', width=1.5), name="SMA 20"))
+        fig.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        st.subheader("Análisis de Distribución de Retornos (Matemática Pura)")
-        c_l, c_r = st.columns([2, 1])
+        st.subheader("Modelado de Reversión y Probabilidad")
+        c_l, c_r = st.columns([1.5, 1])
         
         with c_l:
-            # LIMPIEZA PARA LA CURVA KDE
+            # CURVA DE DENSIDAD PRO
             returns_clean = data['Returns'].dropna()
-            
-            # Crear histograma con Plotly
-            fig_dist = px.histogram(returns_clean, nbins=100, histnorm='probability density', 
-                                   opacity=0.3, color_discrete_sequence=['#00ffcc'], title="Curva de Densidad de Probabilidad (KDE)")
-            
-            # Añadir la línea KDE (Curva suave)
+            fig_dist = px.histogram(returns_clean, nbins=100, histnorm='probability density', opacity=0.2, color_discrete_sequence=['#58a6ff'])
             x_range = np.linspace(returns_clean.min(), returns_clean.max(), 200)
             kde = stats.gaussian_kde(returns_clean)
-            fig_dist.add_trace(go.Scatter(x=x_range, y=kde(x_range), line=dict(color='#00ffcc', width=3), name="Curva de Probabilidad"))
-            
-            # Línea de retorno actual
-            fig_dist.add_vline(x=returns_clean.iloc[-1], line_dash="dash", line_color="red", annotation_text="Retorno Actual")
-            
-            fig_dist.update_layout(template="plotly_dark", height=450, showlegend=False)
+            fig_dist.add_trace(go.Scatter(x=x_range, y=kde(x_range), line=dict(color='#58a6ff', width=3), name="KDE"))
+            fig_dist.add_vline(x=returns_clean.iloc[-1], line_dash="dash", line_color="#ff7b72", annotation_text="ACTUAL")
+            fig_dist.update_layout(template="plotly_dark", height=400, showlegend=False, title="Distribución Probabilística de Retornos")
             st.plotly_chart(fig_dist, use_container_width=True)
-            st.info("💡 La campana muestra dónde es 'normal' que se mueva el precio. Si el 'Retorno Actual' está muy en los extremos, la probabilidad de reversión aumenta drásticamente.")
 
         with c_r:
+            # GAUGE DE PROBABILIDAD MEJORADO
             score = 0
-            if data['Z-Score'].iloc[-1] < -1.5: score += 50
-            if data['RSI'].iloc[-1] < 35: score += 50
+            # Lógica de pesos: Z-score es el 60% del peso, RSI el 40%
+            if z_actual < -1.5: score += 30
+            if z_actual < -2.5: score += 30
+            if rsi_actual < 35: score += 20
+            if rsi_actual < 25: score += 20
+            
+            # Si estamos en corto
+            if z_actual > 1.5: score = 100 - 30
+            if z_actual > 2.5: score = 100 - 60
+            
             fig_gauge = go.Figure(go.Indicator(
-                mode="gauge+number", value=score, title={'text': "Score Reversión %"},
-                gauge={'axis':{'range':[0,100], 'tickcolor':"white"}, 'bar':{'color':"#00ffcc"}, 
-                       'steps':[{'range':[0,40],'color':"#330000"},{'range':[70,100],'color':"#003311"}]}))
-            fig_gauge.update_layout(height=400, template="plotly_dark", margin=dict(l=30,r=30,t=50,b=20))
+                mode="gauge+number+delta",
+                value=score,
+                domain={'x': [0, 1], 'y': [0, 1]},
+                title={'text': "Score Reversión Alcista %", 'font': {'size': 20}},
+                delta={'reference': 50, 'increasing': {'color': "#3fb950"}},
+                gauge={
+                    'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "white"},
+                    'bar': {'color': "#58a6ff"},
+                    'bgcolor': "rgba(0,0,0,0)",
+                    'borderwidth': 2,
+                    'bordercolor': "#30363d",
+                    'steps': [
+                        {'range': [0, 30], 'color': '#ff7b72'}, # Rojo (Baja prob)
+                        {'range': [30, 70], 'color': '#d29922'}, # Ambar
+                        {'range': [70, 100], 'color': '#3fb950'} # Verde (Alta prob)
+                    ],
+                    'threshold': {
+                        'line': {'color': "white", 'width': 4},
+                        'thickness': 0.75,
+                        'value': score
+                    }
+                }
+            ))
+            fig_gauge.update_layout(height=350, template="plotly_dark", margin=dict(l=20,r=20,t=40,b=20))
             st.plotly_chart(fig_gauge, use_container_width=True)
+            
+            veredicto = "REVERSIÓN PROBABLE" if score > 70 else "CONTINUIDAD / RANGO" if score > 30 else "AGOTAMIENTO ALCISTA"
+            st.markdown(f"<h3 style='text-align: center; color: #58a6ff;'>{veredicto}</h3>", unsafe_allow_html=True)
 
     with tab3:
-        # Niveles Camarilla (Zonas institucionales)
+        # CAMARILLA NIVEL PRO
         H, L, C = data['High'].iloc[-2], data['Low'].iloc[-2], data['Close'].iloc[-2]
         d = H - L
         cam = {'H4': C+d*(1.1/2), 'H3': C+d*(1.1/4), 'L3': C-d*(1.1/4), 'L4': C-d*(1.1/2)}
         
-        pc = st.columns(4)
-        pc[0].metric("H4 (Breakout Venta)", f"{cam['H4']:.4f}")
-        pc[1].metric("H3 (Venta Reversión)", f"{cam['H3']:.4f}")
-        pc[2].metric("L3 (Compra Reversión)", f"{cam['L3']:.4f}")
-        pc[3].metric("L4 (Breakout Compra)", f"{cam['L4']:.4f}")
-        
+        cols_cam = st.columns(4)
+        for i, (k, v) in enumerate(cam.items()):
+            color = "inverse" if "4" in k else "normal"
+            cols_cam[i].metric(k, f"{v:.4f}", delta="Punto de Reacción", delta_color=color)
+
         fig_cam = go.Figure()
-        fig_cam.add_trace(go.Scatter(x=data.index[-50:], y=data['Close'][-50:], name="Precio", line=dict(color="#00ffcc")))
-        for l, v in cam.items():
-            color = "#ff4444" if "4" in l else "#ffcc00"
-            fig_cam.add_hline(y=v, line_dash="dash", line_color=color, annotation_text=l)
-        fig_cam.update_layout(height=500, template="plotly_dark", title="Niveles Camarilla Activos (Basados en vela anterior)")
+        fig_cam.add_trace(go.Scatter(x=data.index[-40:], y=data['Close'][-40:], name="Price", line=dict(color="#58a6ff", width=2)))
+        for k, v in cam.items():
+            line_c = "#ff7b72" if "4" in k else "#d29922"
+            fig_cam.add_hline(y=v, line_dash="dot", line_color=line_c, annotation_text=k)
+        fig_cam.update_layout(height=450, template="plotly_dark", title="Mapa de Liquidez Camarilla (Static Levels)")
         st.plotly_chart(fig_cam, use_container_width=True)
 
     with tab4:
-        st.subheader("Métricas de Estructura Matemática")
+        # ALPHA METRICS
         h_val = calculate_hurst(data['Close'].values)
-        r_val = data['RVOL'].iloc[-1] if 'RVOL' in data.columns else 0
+        st.subheader("Métricas de Estructura Fractal")
         
-        ac1, ac2, ac3 = st.columns(3)
-        ac1.metric("Exponente de Hurst", f"{h_val:.2f}")
-        ac2.metric("Volumen Relativo (RVOL)", f"{r_val:.2f}x")
-        ac3.metric("Momentum (10p)", f"{((data['Close'].iloc[-1]/data['Close'].shift(10).iloc[-1])-1)*100:.2f}%")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Hurst Exponent", f"{h_val:.2f}", "Tendencia" if h_val > 0.5 else "Rango")
+        if 'RVOL' in data.columns:
+            c2.metric("Relative Volume", f"{data['RVOL'].iloc[-1]:.2f}x", "Institutional Activity")
+        c3.metric("Z-Score Distance", f"{z_actual:.2f} σ", "Standard Deviations")
         
-        g1, g2 = st.columns(2)
-        with g1:
-            st.plotly_chart(px.line(data, x=data.index, y='Z-Score', title="Z-Score Dinámico").add_hline(y=2, line_color="red").add_hline(y=-2, line_color="green"), use_container_width=True)
-        with g2:
-            st.plotly_chart(px.bar(data, x=data.index, y='RVOL', title="Anomalías de RVOL").add_hline(y=1.5, line_color="red", line_dash="dash"), use_container_width=True)
+        st.divider()
+        st.plotly_chart(px.line(data, x=data.index, y='Z-Score', title="Historical Z-Score Oscillations").add_hline(y=2, line_color="red").add_hline(y=-2, line_color="green"), use_container_width=True)
+
+else:
+    st.error("Error cargando datos. Revisa la conexión o el Ticker.")
