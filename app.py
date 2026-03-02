@@ -127,29 +127,43 @@ if data is not None:
             st.write("**Niveles Críticos Camarilla:**")
             st.code(f"Resistencia (H3): {cam['H3']:.4f} | Soporte (L3): {cam['L3']:.4f}")
 
+    # NUEVA PESTAÑA 4: DIRECCIÓN ESTADÍSTICA
     with tab4:
-        st.subheader("🕵️ Motor de Inferencia Direccional (Restaurado)")
-        rets = data['Returns'].tail(60).dropna()
-        skew_v = stats.skew(rets)
-        kurt_v = stats.kurtosis(rets)
-        hurst_v = calculate_hurst(data['Close'].values)
+        st.subheader("🕵️ Motor de Inferencia Direccional")
+        
+        # 1. Cálculos Estadísticos Superiores
+        recent_rets = data['Returns'].tail(60).dropna()
+        skew_val = stats.skew(recent_rets)
+        kurt_val = stats.kurtosis(recent_rets)
+        hurst_val = calculate_hurst(data['Close'].values)
         
         ca, cb, cc = st.columns(3)
-        ca.metric("Skewness (Sesgo)", f"{skew_v:.2f}", help="Positivo: Sesgo alcista latente")
-        cb.metric("Kurtosis (Inercia)", f"{kurt_v:.2f}", help=">3: Probabilidad de cisne negro")
-        cc.metric("Hurst Exponent", f"{hurst_v:.2f}", delta="Tendencia" if hurst_v > 0.5 else "Rango")
+        with ca:
+            st.metric("Skewness (Sesgo)", f"{skew_val:.2f}")
+            st.caption("Si > 0: Fuerza alcista latente. Si < 0: Presión bajista.")
+        with cb:
+            st.metric("Kurtosis (Inercia)", f"{kurt_val:.2f}")
+            st.caption("Si > 3: Riesgo de movimiento violento (Fat Tails).")
+        with cc:
+            st.metric("Hurst Exponent", f"{hurst_val:.2f}")
+            st.caption("> 0.55: Tendencia sólida. < 0.45: Rango/Reversión.")
 
         st.divider()
+
+        # 2. Análisis de Residuos y Aceleración
+        # Detectamos si el precio se acelera más allá de su comportamiento promedio
+        data['Expected'] = data['Returns'].rolling(20).mean()
+        data['Residuals'] = data['Returns'] - data['Expected']
+        
         col_res, col_vol = st.columns(2)
         
         with col_res:
-            data['Expected'] = data['Returns'].rolling(20).mean()
-            data['Residuals'] = data['Returns'] - data['Expected']
-            st.write("**Aceleración vs Deceleración (Residuos)**")
+            st.write("**Aceleración Direccional (Residuos)**")
             fig_res = px.area(data.tail(100), y='Residuals', color_discrete_sequence=['#00d4ff'])
             fig_res.add_hline(y=0, line_dash="dash", line_color="white")
             fig_res.update_layout(template="plotly_dark", height=350)
             st.plotly_chart(fig_res, use_container_width=True)
+            st.caption("Residuos positivos + Skew positivo = Confirmación de subida con inercia.")
 
         with col_vol:
             st.write("**Anomalía de Volumen (Z-Score)**")
@@ -158,5 +172,7 @@ if data is not None:
                 fig_v.add_hline(y=2, line_dash="dot", line_color="red")
                 fig_v.update_layout(template="plotly_dark", height=350, coloraxis_showscale=False)
                 st.plotly_chart(fig_v, use_container_width=True)
+                st.caption("Volumen Z > 2 indica entrada masiva institucional (posible techo o suelo).")
+
 else:
     st.error("Error al cargar datos.")
