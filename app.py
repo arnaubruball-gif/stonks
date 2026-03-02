@@ -9,18 +9,17 @@ import statsmodels.api as sm
 from datetime import datetime
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Alpha Quant v7.1 - Full JDetector Engine", layout="wide")
+st.set_page_config(page_title="Alpha Quant v7.2 - Integrated Dual Engine", layout="wide")
 
 st.markdown("""
     <style>
     .stMetric { background-color: #0d1117; border: 1px solid #30363d; padding: 20px; border-radius: 12px; }
     .stTabs [aria-selected="true"] { color: #00d4ff !important; border-bottom: 2px solid #00d4ff !important; }
     .confluencia-box { padding: 20px; border-radius: 10px; text-align: center; font-weight: bold; margin-bottom: 10px; border: 1px solid #30363d; }
-    .audit-table { font-size: 12px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- MOTOR MATEMÁTICO COMPLETO ---
+# --- MOTOR MATEMÁTICO ---
 def calculate_hurst(series):
     if len(series) < 20: return 0.5
     lags = range(2, 15)
@@ -35,12 +34,12 @@ def get_full_engine_data(ticker_id, t):
     if df.empty: return None
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     
-    # 1. Z-PRICE (Elástico)
+    # 1. Z-PRICE (Distancia a la Media)
     df['SMA20'] = df['Close'].rolling(20).mean()
     df['Std'] = df['Close'].rolling(20).std()
     df['Z_Price'] = (df['Close'] - df['SMA20']) / (df['Std'] + 1e-10)
     
-    # 2. Z-DIFF RMF (JDetector Engine)
+    # 2. Z-DIFF RMF (Flujo vs Retorno)
     df['Ret'] = df['Close'].pct_change()
     df['Vol_Proxy'] = (df['High'] - df['Low']) * 100000
     df['RMF'] = df['Close'] * df['Vol_Proxy']
@@ -48,21 +47,20 @@ def get_full_engine_data(ticker_id, t):
     diff = df['Ret'].rolling(periodo_z).sum() - df['RMF'].pct_change().rolling(periodo_z).sum()
     df['Z_Diff'] = (diff - diff.rolling(periodo_z).mean()) / (diff.rolling(periodo_z).std() + 1e-10)
     
-    # 3. R2 DINÁMICO (Calidad de la regresión RMF)
+    # 3. R2 DINÁMICO
     r2_series = []
     for i in range(len(df)):
         if i < 20: r2_series.append(0); continue
         subset = df.iloc[i-20:i].dropna()
         try:
-            r2 = sm.OLS(subset['Ret'], sm.add_constant(subset['RMF'])).fit().rsquared
+            X = sm.add_constant(subset['RMF'])
+            r2 = sm.OLS(subset['Ret'], X).fit().rsquared
             r2_series.append(r2)
         except: r2_series.append(0)
     df['R2_Dynamic'] = r2_series
     
-    # 4. OTROS
+    # 4. RSI
     df['RSI'] = 100 - (100 / (1 + (df['Ret'].clip(lower=0).ewm(13).mean() / (-1*df['Ret'].clip(upper=0)).ewm(13).mean())))
-    if 'Volume' in df.columns:
-        df['Vol_ZScore'] = (df['Volume'] - df['Volume'].rolling(20).mean()) / (df['Volume'].rolling(20).std() + 1e-10)
     
     return df
 
@@ -103,33 +101,41 @@ if data is not None:
         z_d = data['Z_Diff'].iloc[-1]
         r2 = data['R2_Dynamic'].iloc[-1]
         
-        # 1. VEREDICTO DUAL (Logica JDetector)
+        # VEREDICTO
         if z_p > 2.0 and z_d > 1.4:
-            color, msg = "#ff4b4b", "🚨 VENTA DE ALTA PROBABILIDAD (Confluencia Dual)"
+            color, msg = "#ff4b4b", "🚨 VENTA DE ALTA PROBABILIDAD (Confluencia Dual Detectada)"
         elif z_p < -2.0 and z_d < -1.4:
-            color, msg = "#00cc96", "🟢 COMPRA DE ALTA PROBABILIDAD (Confluencia Dual)"
-        elif abs(z_p) > 1.8:
-            color, msg = "#ffa500", "⚠️ PRECIO EXTENDIDO: Posible tendencia fuerte o agotamiento."
+            color, msg = "#00cc96", "🟢 COMPRA DE ALTA PROBABILIDAD (Confluencia Dual Detectada)"
+        elif abs(z_p) > 2.0:
+            color, msg = "#ffa500", "⚠️ PRECIO SOBREEXTENDIDO: Precaución, tendencia fuerte sin giro de flujo."
         else:
-            color, msg = "#3d4463", "⚪ ESTADO: NEUTRAL"
+            color, msg = "#3d4463", "⚪ ESTADO: MERCADO EN EQUILIBRIO"
 
         st.markdown(f'<div class="confluencia-box" style="background-color:{color}; color:white;">{msg}</div>', unsafe_allow_html=True)
 
-        # 2. MÉTRICAS CLAVE
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Z-Price (Elástico)", f"{z_p:.2f} σ")
         c2.metric("Z-Diff (RMF)", f"{z_d:.2f}")
-        c3.metric("R2 Dynamic (Fuerza RMF)", f"{r2:.3f}")
+        c3.metric("R2 Dynamic", f"{r2:.3f}")
         c4.metric("RSI (14)", f"{data['RSI'].iloc[-1]:.1f}")
+
+        # --- OSCILADOR DUAL REINCORPORADO ---
+        st.write("**Visualización del Oscilador Dual (Precio vs Dinero)**")
+        fig_dual = go.Figure()
+        fig_dual.add_trace(go.Scatter(x=data.index[-80:], y=data['Z_Price'].tail(80), name="Z-Price (Precio)", line=dict(color='#00d4ff', width=2)))
+        fig_dual.add_trace(go.Scatter(x=data.index[-80:], y=data['Z_Diff'].tail(80), name="Z-Diff (Smart Money)", line=dict(color='#ffd700', dash='dot', width=2)))
+        fig_dual.add_hline(y=2, line_dash="dash", line_color="#ff4b4b", opacity=0.5)
+        fig_dual.add_hline(y=-2, line_dash="dash", line_color="#00cc96", opacity=0.5)
+        fig_dual.update_layout(template="plotly_dark", height=350, margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig_dual, use_container_width=True)
 
         st.divider()
 
-        # 3. AUDITORÍA DE PRESIÓN (Lo que faltaba del historial)
-        st.write("**🎯 Auditoría de Presión (Últimas 7 velas)**")
+        # AUDITORÍA DE PRESIÓN
+        st.write("**🎯 Auditoría de Presión Histórica (Últimas 7 velas)**")
         audit_df = data.tail(7).copy()
         audit_df['Signal'] = audit_df.apply(lambda x: "🟢 COMPRA" if x['Z_Diff'] < -1.4 else ("🚨 VENTA" if x['Z_Diff'] > 1.4 else "⚪ Neutral"), axis=1)
-        audit_df_display = audit_df[['Close', 'Z_Price', 'Z_Diff', 'R2_Dynamic', 'Signal']]
-        st.table(audit_df_display.style.format({'Close': '{:.4f}', 'Z_Price': '{:.2f}', 'Z_Diff': '{:.2f}', 'R2_Dynamic': '{:.3f}'}))
+        st.table(audit_df[['Close', 'Z_Price', 'Z_Diff', 'R2_Dynamic', 'Signal']].style.format({'Close': '{:.4f}', 'Z_Price': '{:.2f}', 'Z_Diff': '{:.2f}', 'R2_Dynamic': '{:.3f}'}))
 
     with tab3:
         st.subheader("🕵️ Motor de Inferencia & Estructura")
@@ -138,19 +144,13 @@ if data is not None:
         m1.metric("Skewness (Sesgo)", f"{stats.skew(rets):.2f}")
         m2.metric("Kurtosis", f"{stats.kurtosis(rets):.2f}")
         m3.metric("Hurst Exponent", f"{calculate_hurst(data['Close'].values):.2f}")
-
-        st.divider()
-        st.write("**Oscilador Dual: Precio vs Flujo Institucional (RMF)**")
-        fig_dual = go.Figure()
-        fig_dual.add_trace(go.Scatter(x=data.index[-100:], y=data['Z_Price'].tail(100), name="Z-Price (Precio)", line=dict(color='#00d4ff')))
-        fig_dual.add_trace(go.Scatter(x=data.index[-100:], y=data['Z_Diff'].tail(100), name="Z-Diff (Gasolina)", line=dict(color='#ffd700', dash='dot')))
-        fig_dual.add_hline(y=2, line_dash="dash", line_color="red", opacity=0.5)
-        fig_dual.add_hline(y=-2, line_dash="dash", line_color="green", opacity=0.5)
-        st.plotly_chart(fig_dual.update_layout(template="plotly_dark", height=450), use_container_width=True)
         
-        if 'Vol_ZScore' in data.columns:
-            st.write("**Anomalías de Volumen Z-Score**")
-            st.plotly_chart(px.bar(data.tail(100), y='Vol_ZScore', color='Vol_ZScore', color_continuous_scale='RdYlGn').update_layout(template="plotly_dark", height=300), use_container_width=True)
+        st.divider()
+        st.write("**Anomalías de Volumen Z-Score**")
+        if 'Volume' in data.columns:
+            df_v = data.tail(100).copy()
+            df_v['Vol_ZScore'] = (df_v['Volume'] - df_v['Volume'].rolling(20).mean()) / (df_v['Volume'].rolling(20).std() + 1e-10)
+            st.plotly_chart(px.bar(df_v, y='Vol_ZScore', color='Vol_ZScore', color_continuous_scale='RdYlGn').update_layout(template="plotly_dark", height=300), use_container_width=True)
 
 else:
-    st.error("Error al cargar datos.")
+    st.error("Error al cargar datos. Verifica la conexión o el Ticker.")
