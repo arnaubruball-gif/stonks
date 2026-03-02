@@ -136,8 +136,7 @@ if data is not None:
         audit_df = data.tail(7).copy()
         audit_df['Signal'] = audit_df.apply(lambda x: "🟢 COMPRA" if x['Z_Diff'] < -1.4 else ("🚨 VENTA" if x['Z_Diff'] > 1.4 else "⚪ Neutral"), axis=1)
         st.table(audit_df[['Close', 'Z_Price', 'Z_Diff', 'R2_Dynamic', 'Signal']].style.format({'Close': '{:.4f}', 'Z_Price': '{:.2f}', 'Z_Diff': '{:.2f}', 'R2_Dynamic': '{:.3f}'}))
-
-    # NUEVA PESTAÑA 4: DIRECCIÓN ESTADÍSTICA
+# NUEVA PESTAÑA 3: DIRECCIÓN ESTADÍSTICA
     with tab3:
         st.subheader("🕵️ Motor de Inferencia Direccional")
         
