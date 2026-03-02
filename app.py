@@ -5,20 +5,22 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import scipy.stats as stats
+import statsmodels.api as sm
 from datetime import datetime
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Alpha Quant v7 - Master Confluence", layout="wide")
+st.set_page_config(page_title="Alpha Quant v7.1 - Full JDetector Engine", layout="wide")
 
 st.markdown("""
     <style>
     .stMetric { background-color: #0d1117; border: 1px solid #30363d; padding: 20px; border-radius: 12px; }
     .stTabs [aria-selected="true"] { color: #00d4ff !important; border-bottom: 2px solid #00d4ff !important; }
-    .confluencia-box { padding: 20px; border-radius: 10px; text-align: center; font-weight: bold; margin-bottom: 20px; border: 1px solid #30363d; }
+    .confluencia-box { padding: 20px; border-radius: 10px; text-align: center; font-weight: bold; margin-bottom: 10px; border: 1px solid #30363d; }
+    .audit-table { font-size: 12px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- MOTOR MATEMÁTICO DUAL ---
+# --- MOTOR MATEMÁTICO COMPLETO ---
 def calculate_hurst(series):
     if len(series) < 20: return 0.5
     lags = range(2, 15)
@@ -27,8 +29,8 @@ def calculate_hurst(series):
     return poly[0] * 2.0
 
 @st.cache_data(ttl=300)
-def get_master_data(ticker_id, t):
-    p_map = {"15m": "5d", "1h": "30d", "4h": "60d", "1d": "100d"}
+def get_full_engine_data(ticker_id, t):
+    p_map = {"15m": "5d", "1h": "30d", "4h": "60d", "1d": "120d"}
     df = yf.download(ticker_id, period=p_map[t], interval=t, progress=False)
     if df.empty: return None
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
@@ -36,9 +38,9 @@ def get_master_data(ticker_id, t):
     # 1. Z-PRICE (Elástico)
     df['SMA20'] = df['Close'].rolling(20).mean()
     df['Std'] = df['Close'].rolling(20).std()
-    df['Z_Price'] = (df['Close'] - df['SMA20']) / df['Std']
+    df['Z_Price'] = (df['Close'] - df['SMA20']) / (df['Std'] + 1e-10)
     
-    # 2. Z-DIFF RMF (Gasolina/Flujo)
+    # 2. Z-DIFF RMF (JDetector Engine)
     df['Ret'] = df['Close'].pct_change()
     df['Vol_Proxy'] = (df['High'] - df['Low']) * 100000
     df['RMF'] = df['Close'] * df['Vol_Proxy']
@@ -46,19 +48,25 @@ def get_master_data(ticker_id, t):
     diff = df['Ret'].rolling(periodo_z).sum() - df['RMF'].pct_change().rolling(periodo_z).sum()
     df['Z_Diff'] = (diff - diff.rolling(periodo_z).mean()) / (diff.rolling(periodo_z).std() + 1e-10)
     
-    # 3. OTROS INDICADORES
-    up = df['Ret'].clip(lower=0)
-    down = -1 * df['Ret'].clip(upper=0)
-    ema_up = up.ewm(com=13, adjust=False).mean()
-    ema_down = down.ewm(com=13, adjust=False).mean()
-    df['RSI'] = 100 - (100 / (1 + (ema_up/ema_down)))
+    # 3. R2 DINÁMICO (Calidad de la regresión RMF)
+    r2_series = []
+    for i in range(len(df)):
+        if i < 20: r2_series.append(0); continue
+        subset = df.iloc[i-20:i].dropna()
+        try:
+            r2 = sm.OLS(subset['Ret'], sm.add_constant(subset['RMF'])).fit().rsquared
+            r2_series.append(r2)
+        except: r2_series.append(0)
+    df['R2_Dynamic'] = r2_series
     
+    # 4. OTROS
+    df['RSI'] = 100 - (100 / (1 + (df['Ret'].clip(lower=0).ewm(13).mean() / (-1*df['Ret'].clip(upper=0)).ewm(13).mean())))
     if 'Volume' in df.columns:
-        df['Vol_ZScore'] = (df['Volume'] - df['Volume'].rolling(20).mean()) / df['Volume'].rolling(20).std()
+        df['Vol_ZScore'] = (df['Volume'] - df['Volume'].rolling(20).mean()) / (df['Volume'].rolling(20).std() + 1e-10)
     
     return df
 
-# --- ACTIVOS RESTAURADOS ---
+# --- ACTIVOS ---
 assets_dict = {
     "Currencies": {"Dólar Index": "DX-Y.NYB", "EUR/USD": "EURUSD=X", "USD/JPY": "JPY=X", "GBP/USD": "GBPUSD=X"},
     "Indices": {"S&P 500": "^GSPC", "Nasdaq 100": "^IXIC", "DAX 40": "^GDAXI"},
@@ -72,17 +80,15 @@ nombre_activo = st.sidebar.selectbox("Activo", list(assets_dict[cat].keys()))
 ticker = assets_dict[cat][nombre_activo]
 temp = st.sidebar.selectbox("Temporalidad", ["15m", "1h", "4h", "1d"], index=2)
 
-data = get_master_data(ticker, temp)
+data = get_full_engine_data(ticker, temp)
 
 if data is not None:
-    # Niveles Camarilla
+    # Camarilla
     H, L, C = data['High'].iloc[-2], data['Low'].iloc[-2], data['Close'].iloc[-2]
-    d = H - L
-    cam = {'H4': C+d*(1.1/2), 'H3': C+d*(1.1/4), 'L3': C-d*(1.1/4), 'L4': C-d*(1.1/2)}
+    d_range = H - L
+    cam = {'H4': C+d_range*(1.1/2), 'H3': C+d_range*(1.1/4), 'L3': C-d_range*(1.1/4), 'L4': C-d_range*(1.1/2)}
 
-    st.title(f"🚀 {nombre_activo} | Master Engine")
-    
-    tab1, tab2, tab3 = st.tabs(["📊 Gráfico + Camarilla", "🧬 Score de Confluencia Dual", "🕵️ Dirección Estadística"])
+    tab1, tab2, tab3 = st.tabs(["📊 Gráfico + Camarilla", "🧬 Score Confluencia & Auditoría", "🕵️ Dirección Estadística"])
 
     with tab1:
         fig = go.Figure(data=[go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name="Precio")])
@@ -95,59 +101,55 @@ if data is not None:
     with tab2:
         z_p = data['Z_Price'].iloc[-1]
         z_d = data['Z_Diff'].iloc[-1]
-        rsi = data['RSI'].iloc[-1]
+        r2 = data['R2_Dynamic'].iloc[-1]
         
-        # Veredicto de Confluencia Dual
+        # 1. VEREDICTO DUAL (Logica JDetector)
         if z_p > 2.0 and z_d > 1.4:
-            color, msg = "#ff4b4b", "🚨 VENTA DE ALTA PROBABILIDAD (Precio Agotado + Sin Flujo)"
+            color, msg = "#ff4b4b", "🚨 VENTA DE ALTA PROBABILIDAD (Confluencia Dual)"
         elif z_p < -2.0 and z_d < -1.4:
-            color, msg = "#00cc96", "🟢 COMPRA DE ALTA PROBABILIDAD (Suelo Institucional + Acumulación RMF)"
-        elif abs(z_p) > 2.0 and abs(z_d) < 1.0:
-            color, msg = "#ffa500", "⚠️ TENDENCIA SANA: Precio extendido pero con gasolina real."
+            color, msg = "#00cc96", "🟢 COMPRA DE ALTA PROBABILIDAD (Confluencia Dual)"
+        elif abs(z_p) > 1.8:
+            color, msg = "#ffa500", "⚠️ PRECIO EXTENDIDO: Posible tendencia fuerte o agotamiento."
         else:
-            color, msg = "#3d4463", "⚪ ESTADO: NEUTRAL / EQUILIBRIO"
+            color, msg = "#3d4463", "⚪ ESTADO: NEUTRAL"
 
         st.markdown(f'<div class="confluencia-box" style="background-color:{color}; color:white;">{msg}</div>', unsafe_allow_html=True)
 
-        c1, c2, c3 = st.columns(3)
+        # 2. MÉTRICAS CLAVE
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Z-Price (Elástico)", f"{z_p:.2f} σ")
-        c2.metric("Z-Diff (Flujo RMF)", f"{z_d:.2f}")
-        c3.metric("RSI Actual", f"{rsi:.1f}")
-
-        # Gauge de Probabilidad
-        score = 50
-        if z_p < -2 or z_d < -1.4: score += 25
-        if rsi < 30: score += 15
-        if z_p > 2 or z_d > 1.4: score -= 25
-        if rsi > 70: score -= 15
-        
-        fig_g = go.Figure(go.Indicator(mode="gauge+number", value=score, gauge={'axis':{'range':[0,100]}, 'bar':{'color':"#00d4ff"}, 'steps':[{'range':[0,35],'color':'#ff4b4b'},{'range':[35,65],'color':'#ffa500'},{'range':[65,100],'color':'#00cc96'}]}))
-        fig_g.update_layout(height=350, template="plotly_dark")
-        st.plotly_chart(fig_g, use_container_width=True)
-
-    with tab3:
-        st.subheader("🕵️ Motor de Dirección e Inferencia")
-        rets = data['Ret'].tail(60).dropna()
-        skew_v = stats.skew(rets)
-        kurt_v = stats.kurtosis(rets)
-        hurst_v = calculate_hurst(data['Close'].values)
-        
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Skewness (Sesgo)", f"{skew_v:.2f}")
-        m2.metric("Kurtosis", f"{kurt_v:.2f}")
-        m3.metric("Hurst Exponent", f"{hurst_v:.2f}")
+        c2.metric("Z-Diff (RMF)", f"{z_d:.2f}")
+        c3.metric("R2 Dynamic (Fuerza RMF)", f"{r2:.3f}")
+        c4.metric("RSI (14)", f"{data['RSI'].iloc[-1]:.1f}")
 
         st.divider()
-        st.write("**Oscilador Dual (Z-Price vs Z-Diff)**")
-        fig_dual = go.Figure()
-        fig_dual.add_trace(go.Scatter(x=data.index[-80:], y=data['Z_Price'].tail(80), name="Z-Price (Precio)", line=dict(color='#00d4ff')))
-        fig_dual.add_trace(go.Scatter(x=data.index[-80:], y=data['Z_Diff'].tail(80), name="Z-Diff (RMF)", line=dict(color='#ffd700', dash='dot')))
-        fig_dual.add_hline(y=2, line_dash="dash", line_color="red")
-        fig_dual.add_hline(y=-2, line_dash="dash", line_color="green")
-        st.plotly_chart(fig_dual.update_layout(template="plotly_dark", height=400), use_container_width=True)
 
+        # 3. AUDITORÍA DE PRESIÓN (Lo que faltaba del historial)
+        st.write("**🎯 Auditoría de Presión (Últimas 7 velas)**")
+        audit_df = data.tail(7).copy()
+        audit_df['Signal'] = audit_df.apply(lambda x: "🟢 COMPRA" if x['Z_Diff'] < -1.4 else ("🚨 VENTA" if x['Z_Diff'] > 1.4 else "⚪ Neutral"), axis=1)
+        audit_df_display = audit_df[['Close', 'Z_Price', 'Z_Diff', 'R2_Dynamic', 'Signal']]
+        st.table(audit_df_display.style.format({'Close': '{:.4f}', 'Z_Price': '{:.2f}', 'Z_Diff': '{:.2f}', 'R2_Dynamic': '{:.3f}'}))
+
+    with tab3:
+        st.subheader("🕵️ Motor de Inferencia & Estructura")
+        rets = data['Ret'].tail(60).dropna()
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Skewness (Sesgo)", f"{stats.skew(rets):.2f}")
+        m2.metric("Kurtosis", f"{stats.kurtosis(rets):.2f}")
+        m3.metric("Hurst Exponent", f"{calculate_hurst(data['Close'].values):.2f}")
+
+        st.divider()
+        st.write("**Oscilador Dual: Precio vs Flujo Institucional (RMF)**")
+        fig_dual = go.Figure()
+        fig_dual.add_trace(go.Scatter(x=data.index[-100:], y=data['Z_Price'].tail(100), name="Z-Price (Precio)", line=dict(color='#00d4ff')))
+        fig_dual.add_trace(go.Scatter(x=data.index[-100:], y=data['Z_Diff'].tail(100), name="Z-Diff (Gasolina)", line=dict(color='#ffd700', dash='dot')))
+        fig_dual.add_hline(y=2, line_dash="dash", line_color="red", opacity=0.5)
+        fig_dual.add_hline(y=-2, line_dash="dash", line_color="green", opacity=0.5)
+        st.plotly_chart(fig_dual.update_layout(template="plotly_dark", height=450), use_container_width=True)
+        
         if 'Vol_ZScore' in data.columns:
-            st.write("**Anomalías de Volumen (Smart Money Activity)**")
+            st.write("**Anomalías de Volumen Z-Score**")
             st.plotly_chart(px.bar(data.tail(100), y='Vol_ZScore', color='Vol_ZScore', color_continuous_scale='RdYlGn').update_layout(template="plotly_dark", height=300), use_container_width=True)
 
 else:
