@@ -70,14 +70,22 @@ if data is not None:
     row = data.iloc[-1]
     tab1, tab2, tab3, tab4 = st.tabs(["🎯 Sniper (05-06 AM)", "🕵️ Diagnóstico", "🧬 Historial de Flujo", "🔗 Absorción & DXY"])
 
-    with tab1:
-        st.subheader(f"Plan de Acción - {nombre}")
-        # Gatillo Sensible
-        if abs(row['Z_Diff']) > 1.0:
+  with tab1:
+        st.subheader("Plan Táctico (05:00 - 06:00 AM)")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Z-Diff", f"{row['Z_Diff']:.2f}")
+        c2.metric("Skewness", f"{row['Skew']:.2f}")
+        c3.metric("R2 Calidad", f"{row['R2']:.3f}")
+        
+        # Lógica de Gatillo
+        if abs(row['Z_Diff']) > 1.0 and row['R2'] > 0.05:
             color = "#00ff00" if row['Z_Diff'] < -1.0 else "#ff0000"
             st.markdown(f"<div class='diag-box' style='border-color:{color};'><h3>DISPARAR: {'LONG' if row['Z_Diff'] < -1.0 else 'SHORT'}</h3>"
-                        f"Precio: <b>{row['Close']:.4f}</b> | Confianza R2: {row['R2']:.3f}</div>", unsafe_allow_html=True)
-        
+                        f"Entrada sugerida cerca de: <b>{row['Close']:.4f}</b><br>"
+                        f"Horizonte: Intradía / 2-3 días</div>", unsafe_allow_html=True)
+        else:
+            st.info("Esperando confluencia de alta calidad (Z-Diff > 1.0 & R2 > 0.05)")
+
         fig = go.Figure(data=[go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'])])
         st.plotly_chart(fig.update_layout(height=400, template="plotly_dark", xaxis_rangeslider_visible=False), use_container_width=True)
 
