@@ -124,16 +124,9 @@ if data is not None:
         fig = go.Figure(data=[go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'])])
         st.plotly_chart(fig.update_layout(height=450, template="plotly_dark", xaxis_rangeslider_visible=False), use_container_width=True)
 
-    with tab2:
-        st.subheader("Diagnóstico Estructural")
-        # Tabla simple de estado
-        def get_simple_diag(z_d, z_p, r2):
-            d = []
-            d.append({"Métrica": "Flujo Institucional", "Estado": "🟢 Fuerte" if abs(z_d) > 1 else "⚪ Débil"})
-            d.append({"Métrica": "Calidad del Movimiento", "Estado": "💎 Alta" if r2 > 0.15 else "💨 Ruido"})
-            d.append({"Métrica": "Ubicación del Precio", "Estado": "⚠️ Extremo" if abs(z_p) > 2 else "⚓ Equilibrio"})
-            return pd.DataFrame(d)
-        st.table(get_simple_diag(row['Z_Diff'], row['Z_Price'], row['R2']))
+   with tab2:
+        st.subheader("Centro de Diagnóstico Dinámico")
+        st.table(get_dynamic_diagnosis(row['Z_Diff'], row['Z_Price'], row['Skew'], row['R2']))
 
     with tab3:
         st.markdown("<div class='gold-header'>🧬 HISTORIAL DE FLUJO (DIVERGENCIAS)</div>", unsafe_allow_html=True)
