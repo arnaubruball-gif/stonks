@@ -7,26 +7,16 @@ import plotly.express as px
 import statsmodels.api as sm
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Alpha Quant v11.0 - Master Sniper", layout="wide")
+st.set_page_config(page_title="Alpha Quant v11.1 - Sniper Pro", layout="wide")
 
 st.markdown("""
     <style>
     .stMetric { background-color: #0d1117; border: 1px solid #30363d; padding: 15px; border-radius: 10px; }
-    .prob-box { padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #30363d; margin-bottom: 20px; }
-    .strategy-card { background-color: #161b22; padding: 15px; border-left: 5px solid #00d4ff; border-radius: 8px; margin-bottom: 20px; }
     .diag-box { background-color: #161b22; border-left: 5px solid #ffd700; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
     .gold-header { color: #ffd700; font-weight: bold; border-bottom: 1px solid #ffd700; padding-bottom: 5px; margin-bottom: 15px; }
     .camarilla-box { background-color: #0a0e14; border: 1px solid #444; padding: 10px; border-radius: 5px; text-align: center; }
     </style>
     """, unsafe_allow_html=True)
-
-# --- MOTOR DE CÁLCULO ---
-def calculate_hurst(series):
-    if len(series) < 20: return 0.5
-    lags = range(2, 15)
-    tau = [np.sqrt(np.std(np.subtract(series[lag:], series[:-lag]))) for lag in lags]
-    poly = np.polyfit(np.log(lags), np.log(tau), 1)
-    return poly[0] * 2.0
 
 @st.cache_data(ttl=300)
 def get_final_data(ticker_id, t):
@@ -77,31 +67,29 @@ def get_final_data(ticker_id, t):
 
 def get_dynamic_diagnosis(z_d, z_p, skew, r2):
     diag = []
-    # Flujo
-    if z_d < -1.0: diag.append({"Dato": "Z-Diff (Flujo)", "Estado": "🟢 COMPRA", "Significado": "Entrada de dinero institucional (Absorción)"})
-    elif z_d > 1.0: diag.append({"Dato": "Z-Diff (Flujo)", "Estado": "🔴 VENTA", "Significado": "Salida de dinero / Distribución oculta"})
-    else: diag.append({"Dato": "Z-Diff (Flujo)", "Estado": "⚪ Neutral", "Significado": "Sin presión clara"})
-    # Precio
-    if abs(z_p) > 2: diag.append({"Dato": "Z-Price (Nivel)", "Estado": "⚠️ EXTREMO", "Significado": "Reversión a la media inminente"})
-    else: diag.append({"Dato": "Z-Price (Nivel)", "Estado": "⚓ Estable", "Significado": "Zona de Fair Value"})
-    # Skewness (Restaurada)
-    if skew > 0.2: diag.append({"Dato": "Skewness", "Estado": "🚀 Alcista", "Significado": "Asimetría: Rebotes más rápidos que caídas"})
-    elif skew < -0.2: diag.append({"Dato": "Skewness", "Estado": "📉 Bajista", "Significado": "Asimetría: Riesgo de caída brusca"})
-    else: diag.append({"Dato": "Skewness", "Estado": "⚖️ Simétrico", "Significado": "Riesgo equilibrado"})
-    # Calidad
-    if r2 > 0.15: diag.append({"Dato": "R2 (Calidad)", "Estado": "💎 ALTA", "Significado": "Movimiento institucional confirmado"})
-    else: diag.append({"Dato": "R2 (Calidad)", "Estado": "💨 RUIDO", "Significado": "Cuidado: Manipulación o bajo volumen"})
+    if z_d < -1.0: diag.append({"Dato": "Z-Diff", "Estado": "🟢 COMPRA", "Significado": "Dinero institucional entrando"})
+    elif z_d > 1.0: diag.append({"Dato": "Z-Diff", "Estado": "🔴 VENTA", "Significado": "Dinero institucional saliendo"})
+    else: diag.append({"Dato": "Z-Diff", "Estado": "⚪ Neutral", "Significado": "Sin flujo claro"})
+    
+    if abs(z_p) > 2: diag.append({"Dato": "Z-Price", "Estado": "⚠️ EXTREMO", "Significado": "Precio sobreextendido"})
+    else: diag.append({"Dato": "Z-Price", "Estado": "⚓ Estable", "Significado": "Zona de equilibrio"})
+    
+    if skew > 0.2: diag.append({"Dato": "Skewness", "Estado": "🚀 Alcista", "Significado": "Sesgo de rebote rápido"})
+    elif skew < -0.2: diag.append({"Dato": "Skewness", "Estado": "📉 Bajista", "Significado": "Riesgo de caída pesada"})
+    
+    if r2 > 0.15: diag.append({"Dato": "R2 Calidad", "Estado": "💎 ALTA", "Significado": "Señal fiable"})
+    else: diag.append({"Dato": "R2 Calidad", "Estado": "💨 RUIDO", "Significado": "Cuidado con trampas"})
     return pd.DataFrame(diag)
 
-# --- INTERFAZ ---
+# --- ACTIVOS ---
 assets = {
     "Currencies": {"EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X"},
-    "Commodities": {"Oro (Gold)": "GC=F", "Plata (Silver)": "SI=F", "Petróleo (WTI)": "CL=F"},
+    "Commodities": {"Oro": "GC=F", "Plata": "SI=F", "WTI": "CL=F"},
     "Indices": {"Nasdaq 100": "^IXIC", "S&P 500": "^GSPC", "DAX 40": "^GDAXI"},
     "Crypto": {"Bitcoin": "BTC-USD", "Ethereum": "ETH-USD"}
 }
 
-st.sidebar.title("📑 Master Sniper v11.0")
+st.sidebar.title("📑 Sniper v11.1")
 cat = st.sidebar.selectbox("Categoría", list(assets.keys()))
 nombre = st.sidebar.selectbox("Activo", list(assets[cat].keys()))
 temp = st.sidebar.selectbox("Temp", ["1h", "4h", "1d"])
@@ -109,11 +97,10 @@ data = get_final_data(assets[cat][nombre], temp)
 
 if data is not None:
     row = data.iloc[-1]
-    hurst = calculate_hurst(data['Close'].values)
-    
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎯 Sniper Ejecución", "🕵️ Centro Diagnóstico", "🧬 Historial Flujo", "🔗 Absorción", "🏰 Camarilla Levels"])
+    # TABS
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎯 Sniper Ejecución", "🕵️ Diagnóstico", "🧬 Historial Flujo", "🔗 Absorción", "🏰 Camarilla"])
 
-   with tab1:
+    with tab1:
         st.subheader(f"Plan Táctico - {nombre} (05:00 - 06:00 AM)")
         c1, c2, c3 = st.columns(3)
         c1.metric("Z-Diff", f"{row['Z_Diff']:.2f}")
@@ -131,32 +118,27 @@ if data is not None:
         st.plotly_chart(fig.update_layout(height=400, template="plotly_dark", xaxis_rangeslider_visible=False), use_container_width=True)
 
     with tab2:
-        st.subheader("Interpretación Dinámica")
+        st.subheader("Centro de Diagnóstico Dinámico")
         st.table(get_dynamic_diagnosis(row['Z_Diff'], row['Z_Price'], row['Skew'], row['R2']))
 
     with tab3:
-        st.markdown("<div class='gold-header'>🧬 HISTORIAL DE FLUJO INSTITUCIONAL</div>")
+        st.markdown("<div class='gold-header'>🧬 HISTORIAL DE FLUJO INSTITUCIONAL</div>", unsafe_allow_html=True)
         fig_f = go.Figure()
-        fig_f.add_trace(go.Scatter(x=data.index, y=data['Z_Price'], name="Z-Price", line=dict(color='#00d4ff')))
-        fig_f.add_trace(go.Scatter(x=data.index, y=data['Z_Diff'], name="Z-Diff", line=dict(color='#ffd700', dash='dot')))
+        fig_f.add_trace(go.Scatter(x=data.index, y=data['Z_Price'], name="Precio", line=dict(color='#00d4ff')))
+        fig_f.add_trace(go.Scatter(x=data.index, y=data['Z_Diff'], name="Flujo", line=dict(color='#ffd700', dash='dot')))
         st.plotly_chart(fig_f.update_layout(template="plotly_dark", height=450), use_container_width=True)
 
     with tab4:
-        st.markdown("<div class='gold-header'>🔗 ABSORCIÓN & DXY</div>")
+        st.markdown("<div class='gold-header'>🔗 ABSORCIÓN & DXY</div>", unsafe_allow_html=True)
         st.plotly_chart(px.bar(data.tail(50), y='Z_Eff', color='Z_Eff', color_continuous_scale='RdYlGn').update_layout(template="plotly_dark", height=400), use_container_width=True)
 
     with tab5:
-        st.markdown("<div class='gold-header'>🏰 NIVELES CAMARILLA ESTRUCTURALES</div>")
+        st.markdown("<div class='gold-header'>🏰 NIVELES CAMARILLA</div>", unsafe_allow_html=True)
         cl1, cl2, cl3, cl4 = st.columns(4)
         cl1.markdown(f"<div class='camarilla-box'><b style='color:red;'>H4</b><br>{row['H4']:.4f}</div>", unsafe_allow_html=True)
         cl2.markdown(f"<div class='camarilla-box'><b style='color:orange;'>H3</b><br>{row['H3']:.4f}</div>", unsafe_allow_html=True)
         cl3.markdown(f"<div class='camarilla-box'><b style='color:lightgreen;'>L3</b><br>{row['L3']:.4f}</div>", unsafe_allow_html=True)
         cl4.markdown(f"<div class='camarilla-box'><b style='color:green;'>L4</b><br>{row['L4']:.4f}</div>", unsafe_allow_html=True)
-        
-        fig_cam = go.Figure(data=[go.Candlestick(x=data.index[-60:], open=data['Open'][-60:], high=data['High'][-60:], low=data['Low'][-60:], close=data['Close'][-60:])])
-        for n, c in [('H4', 'red'), ('H3', 'orange'), ('L3', 'lightgreen'), ('L4', 'green')]:
-            fig_cam.add_hline(y=row[n], line_dash="dash", line_color=c, annotation_text=n)
-        st.plotly_chart(fig_cam.update_layout(height=450, template="plotly_dark", xaxis_rangeslider_visible=False), use_container_width=True)
 
 else:
-    st.error("Error al cargar.")
+    st.error("Error al cargar los datos.")
