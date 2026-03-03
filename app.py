@@ -69,8 +69,7 @@ data = get_master_data(assets[cat][nombre], temp_sel)
 if data is not None:
     row = data.iloc[-1]
     tab1, tab2, tab3, tab4 = st.tabs(["🎯 Sniper (05-06 AM)", "🕵️ Diagnóstico", "🧬 Historial de Flujo", "🔗 Absorción & DXY"])
-
-  with tab1:
+with tab1:
         st.subheader("Plan Táctico (05:00 - 06:00 AM)")
         c1, c2, c3 = st.columns(3)
         c1.metric("Z-Diff", f"{row['Z_Diff']:.2f}")
