@@ -8,7 +8,7 @@ import scipy.stats as stats
 import statsmodels.api as sm
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Master Sniper v10.7 - Full Suite", layout="wide")
+st.set_page_config(page_title="Alpha Quant v10.8 - Multi-Asset", layout="wide")
 
 st.markdown("""
     <style>
@@ -28,20 +28,17 @@ def get_final_data(ticker_id, t):
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     if isinstance(dxy.columns, pd.MultiIndex): dxy.columns = dxy.columns.get_level_values(0)
     
-    # Ventana de Sensibilidad Alta (14 periodos)
     W = 14
     df['Ret'] = df['Close'].pct_change()
     df['SMA'] = df['Close'].rolling(W).mean()
     df['Std'] = df['Close'].rolling(W).std()
     df['Z_Price'] = (df['Close'] - df['SMA']) / (df['Std'] + 1e-10)
     
-    # JDetector Sensible
     df['Vol_Proxy'] = (df['High'] - df['Low']) * 100000
     df['RMF'] = df['Close'] * df['Vol_Proxy']
     diff_val = df['Ret'].rolling(W).sum() - df['RMF'].pct_change().rolling(W).sum()
     df['Z_Diff'] = (diff_val - diff_val.rolling(W).mean()) / (diff_val.rolling(W).std() + 1e-10)
     
-    # Skew y R2
     df['Skew'] = df['Ret'].rolling(30).skew()
     r2_s = []
     for i in range(len(df)):
@@ -51,14 +48,12 @@ def get_final_data(ticker_id, t):
         except: r2_s.append(0)
     df['R2'] = r2_s
 
-    # ABSORCIÓN (DATO ORO)
     df['V_Eff'] = (df['Close'].diff().abs()) / (df['Volume'].rolling(5).mean() + 1e-10)
     df['Z_Eff'] = (df['V_Eff'] - df['V_Eff'].rolling(W).mean()) / (df['V_Eff'].rolling(W).std() + 1e-10)
     df['DXY_Corr'] = df['Ret'].rolling(W).corr(dxy['Close'].pct_change())
     
     return df
 
-# --- LÓGICA DE DIAGNÓSTICO DINÁMICO (COPIADA DE TU V10) ---
 def get_dynamic_diagnosis(z_d, z_p, skew, r2):
     diag = []
     if z_d < -1.0: diag.append({"Dato": "Z-Diff (Flujo)", "Estado": "🟢 COMPRA", "Significado": "Entrada de dinero institucional (Absorción)"})
@@ -76,9 +71,27 @@ def get_dynamic_diagnosis(z_d, z_p, skew, r2):
     else: diag.append({"Dato": "R2 (Calidad)", "Estado": "💨 RUIDO", "Significado": "Cuidado: El precio se mueve sin volumen real"})
     return pd.DataFrame(diag)
 
-# --- INTERFAZ ---
-assets = {"Currencies": {"EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X"}, "Indices": {"Nasdaq 100": "^IXIC"}, "Crypto": {"Bitcoin": "BTC-USD"}}
-st.sidebar.title("📑 Master Sniper v10.7")
+# --- LISTADO EXPANDIDO DE ACTIVOS ---
+assets = {
+    "Currencies": {
+        "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X", 
+        "AUD/USD": "AUDUSD=X", "USD/CHF": "CHF=X", "EUR/GBP": "EURGBP=X"
+    },
+    "Commodities": {
+        "Oro (Gold)": "GC=F", "Plata (Silver)": "SI=F", 
+        "Petróleo Crudo (WTI)": "CL=F", "Gas Natural": "NG=F",
+        "Cobre": "HG=F"
+    },
+    "Indices": {
+        "Nasdaq 100": "^IXIC", "S&P 500": "^GSPC", "Dow Jones": "^DJI",
+        "DAX 40 (Alemania)": "^GDAXI", "IBEX 35": "^IBEX", "Nikkei 225": "^N225"
+    },
+    "Crypto": {
+        "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Solana": "SOL-USD", "Cardano": "ADA-USD"
+    }
+}
+
+st.sidebar.title("📑 Master Sniper v10.8")
 cat = st.sidebar.selectbox("Categoría", list(assets.keys()))
 nombre = st.sidebar.selectbox("Activo", list(assets[cat].keys()))
 temp = st.sidebar.selectbox("Temp", ["1h", "4h", "1d"])
@@ -107,14 +120,12 @@ if data is not None:
 
     with tab2:
         st.subheader("Interpretación de Datos en Tiempo Real")
-        df_diag = get_dynamic_diagnosis(row['Z_Diff'], row['Z_Price'], row['Skew'], row['R2'])
-        st.table(df_diag)
+        st.table(get_dynamic_diagnosis(row['Z_Diff'], row['Z_Price'], row['Skew'], row['R2']))
         st.markdown("---")
         st.write("💡 *Usa esta tabla para validar si el disparo de la Tab 1 tiene sentido institucional.*")
 
     with tab3:
         st.markdown("<div class='gold-header'>🧬 HISTORIAL DE FLUJO INSTITUCIONAL (JDETECTOR)</div>", unsafe_allow_html=True)
-        st.write("Si el **Z-Diff** (Amarillo) diverge del **Z-Price** (Azul), el mercado está preparando un giro.")
         fig_flow = go.Figure()
         fig_flow.add_trace(go.Scatter(x=data.index, y=data['Z_Price'], name="Z-Price (Precio)", line=dict(color='#00d4ff')))
         fig_flow.add_trace(go.Scatter(x=data.index, y=data['Z_Diff'], name="Z-Diff (Dinero)", line=dict(color='#ffd700', dash='dot')))
