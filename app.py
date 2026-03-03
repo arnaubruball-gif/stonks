@@ -82,12 +82,32 @@ def get_dynamic_diagnosis(z_d, z_p, skew, r2):
     else: diag.append({"Dato": "R2 (Calidad)", "Estado": "💨 RUIDO", "Significado": "Cuidado con trampas de bajo volumen"})
     return pd.DataFrame(diag)
 
-# --- ACTIVOS ---
+# --- LISTA DE ACTIVOS ACTUALIZADA (24/5 CONTINUOS) ---
 assets = {
-    "Currencies": {"EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X", "AUD/USD": "AUDUSD=X"},
-    "Commodities": {"Oro": "GC=F", "Plata": "SI=F", "Petróleo WTI": "CL=F", "Cobre": "HG=F"},
-    "Indices": {"Nasdaq 100": "^IXIC", "S&P 500": "^GSPC", "DAX 40": "^GDAXI", "Nikkei 225": "^N225"},
-    "Crypto": {"Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Solana": "SOL-USD"}
+    "Índices (24/5 Continuos)": {
+        "Nasdaq 100 E-Mini": "NQ=F",      # Futuro continuo
+        "S&P 500 E-Mini": "ES=F",        # Futuro continuo
+        "Dow Jones Mini": "YM=F",       # Futuro continuo
+        "DAX 40 (GER)": "FDAX.EX",       # Futuro continuo Europa
+        "Nikkei 225": "NKD=F"            # Futuro continuo Asia/USA
+    },
+    "Currencies (24/5)": {
+        "EUR/USD": "EURUSD=X", 
+        "GBP/USD": "GBPUSD=X", 
+        "USD/JPY": "JPY=X", 
+        "AUD/USD": "AUDUSD=X"
+    },
+    "Commodities (24/5)": {
+        "Oro": "GC=F", 
+        "Plata": "SI=F", 
+        "Petróleo WTI": "CL=F", 
+        "Cobre": "HG=F"
+    },
+    "Crypto (24/7)": {
+        "Bitcoin": "BTC-USD", 
+        "Ethereum": "ETH-USD", 
+        "Solana": "SOL-USD"
+    }
 }
 
 st.sidebar.title("📑 Master Sniper v11.7")
