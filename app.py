@@ -7,7 +7,7 @@ import plotly.express as px
 import statsmodels.api as sm
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Alpha Quant v11.1 - Sniper Pro", layout="wide")
+st.set_page_config(page_title="Alpha Quant v11.2 - Sniper Full-Visual", layout="wide")
 
 st.markdown("""
     <style>
@@ -55,7 +55,7 @@ def get_final_data(ticker_id, t):
     df['Z_Eff'] = (df['V_Eff'] - df['V_Eff'].rolling(W).mean()) / (df['V_Eff'].rolling(W).std() + 1e-10)
     df['DXY_Corr'] = df['Ret'].rolling(W).corr(dxy['Close'].pct_change())
     
-    # Camarilla
+    # Camarilla (Diario Anterior)
     daily = yf.download(ticker_id, period="5d", interval="1d", progress=False)
     if isinstance(daily.columns, pd.MultiIndex): daily.columns = daily.columns.get_level_values(0)
     H, L, C = daily['High'].iloc[-2], daily['Low'].iloc[-2], daily['Close'].iloc[-2]
@@ -76,20 +76,32 @@ def get_dynamic_diagnosis(z_d, z_p, skew, r2):
     
     if skew > 0.2: diag.append({"Dato": "Skewness", "Estado": "🚀 Alcista", "Significado": "Sesgo de rebote rápido"})
     elif skew < -0.2: diag.append({"Dato": "Skewness", "Estado": "📉 Bajista", "Significado": "Riesgo de caída pesada"})
+    else: diag.append({"Dato": "Skewness", "Estado": "⚖️ Simétrico", "Significado": "Equilibrio"})
     
     if r2 > 0.15: diag.append({"Dato": "R2 Calidad", "Estado": "💎 ALTA", "Significado": "Señal fiable"})
     else: diag.append({"Dato": "R2 Calidad", "Estado": "💨 RUIDO", "Significado": "Cuidado con trampas"})
     return pd.DataFrame(diag)
 
-# --- ACTIVOS ---
+# --- ACTIVOS EXPANDIDOS ---
 assets = {
-    "Currencies": {"EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X"},
-    "Commodities": {"Oro": "GC=F", "Plata": "SI=F", "WTI": "CL=F"},
-    "Indices": {"Nasdaq 100": "^IXIC", "S&P 500": "^GSPC", "DAX 40": "^GDAXI"},
-    "Crypto": {"Bitcoin": "BTC-USD", "Ethereum": "ETH-USD"}
+    "Currencies": {
+        "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "JPY=X", 
+        "AUD/USD": "AUDUSD=X", "USD/CHF": "CHF=X", "USD/CAD": "CAD=X"
+    },
+    "Commodities": {
+        "Oro": "GC=F", "Plata": "SI=F", "Petróleo WTI": "CL=F", 
+        "Gas Natural": "NG=F", "Cobre": "HG=F"
+    },
+    "Indices": {
+        "Nasdaq 100": "^IXIC", "S&P 500": "^GSPC", "Dow Jones": "^DJI",
+        "DAX 40": "^GDAXI", "FTSE 100": "^FTSE", "Nikkei 225": "^N225"
+    },
+    "Crypto": {
+        "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Solana": "SOL-USD", "BNB": "BNB-USD"
+    }
 }
 
-st.sidebar.title("📑 Sniper v11.1")
+st.sidebar.title("📑 Sniper v11.2")
 cat = st.sidebar.selectbox("Categoría", list(assets.keys()))
 nombre = st.sidebar.selectbox("Activo", list(assets[cat].keys()))
 temp = st.sidebar.selectbox("Temp", ["1h", "4h", "1d"])
@@ -97,7 +109,7 @@ data = get_final_data(assets[cat][nombre], temp)
 
 if data is not None:
     row = data.iloc[-1]
-    # TABS
+    
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎯 Sniper Ejecución", "🕵️ Diagnóstico", "🧬 Historial Flujo", "🔗 Absorción", "🏰 Camarilla"])
 
     with tab1:
@@ -133,12 +145,19 @@ if data is not None:
         st.plotly_chart(px.bar(data.tail(50), y='Z_Eff', color='Z_Eff', color_continuous_scale='RdYlGn').update_layout(template="plotly_dark", height=400), use_container_width=True)
 
     with tab5:
-        st.markdown("<div class='gold-header'>🏰 NIVELES CAMARILLA</div>", unsafe_allow_html=True)
+        st.markdown("<div class='gold-header'>🏰 NIVELES CAMARILLA PROYECTADOS</div>", unsafe_allow_html=True)
         cl1, cl2, cl3, cl4 = st.columns(4)
-        cl1.markdown(f"<div class='camarilla-box'><b style='color:red;'>H4</b><br>{row['H4']:.4f}</div>", unsafe_allow_html=True)
-        cl2.markdown(f"<div class='camarilla-box'><b style='color:orange;'>H3</b><br>{row['H3']:.4f}</div>", unsafe_allow_html=True)
-        cl3.markdown(f"<div class='camarilla-box'><b style='color:lightgreen;'>L3</b><br>{row['L3']:.4f}</div>", unsafe_allow_html=True)
-        cl4.markdown(f"<div class='camarilla-box'><b style='color:green;'>L4</b><br>{row['L4']:.4f}</div>", unsafe_allow_html=True)
+        cl1.markdown(f"<div class='camarilla-box'><b style='color:red;'>H4 (Breakout)</b><br>{row['H4']:.4f}</div>", unsafe_allow_html=True)
+        cl2.markdown(f"<div class='camarilla-box'><b style='color:orange;'>H3 (Reversión)</b><br>{row['H3']:.4f}</div>", unsafe_allow_html=True)
+        cl3.markdown(f"<div class='camarilla-box'><b style='color:lightgreen;'>L3 (Reversión)</b><br>{row['L3']:.4f}</div>", unsafe_allow_html=True)
+        cl4.markdown(f"<div class='camarilla-box'><b style='color:green;'>L4 (Breakout)</b><br>{row['L4']:.4f}</div>", unsafe_allow_html=True)
+        
+        # --- EL GRÁFICO CON NIVELES ---
+        fig_cam = go.Figure(data=[go.Candlestick(x=data.index[-50:], open=data['Open'][-50:], high=data['High'][-50:], low=data['Low'][-50:], close=data['Close'][-50:])])
+        for n, c in [('H4', 'red'), ('H3', 'orange'), ('L3', 'lightgreen'), ('L4', 'green')]:
+            fig_cam.add_hline(y=row[n], line_dash="dash", line_color=c, annotation_text=n, annotation_position="top left")
+        
+        st.plotly_chart(fig_cam.update_layout(height=550, template="plotly_dark", xaxis_rangeslider_visible=False), use_container_width=True)
 
 else:
     st.error("Error al cargar los datos.")
