@@ -113,22 +113,20 @@ if data is not None:
     
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎯 Sniper Ejecución", "🕵️ Centro Diagnóstico", "🧬 Historial Flujo", "🔗 Absorción", "🏰 Camarilla Levels"])
 
-    with tab1:
-        # Probabilidades Originales
-        prob_buy = 50.0 + ((-row['Z_Price'] * 15) if row['Z_Price'] < -1.5 else 0) + ((-row['Z_Diff'] * 20) if row['Z_Diff'] < -1.0 else 0)
-        prob_sell = 50.0 + ((row['Z_Price'] * 15) if row['Z_Price'] > 1.5 else 0) + ((row['Z_Diff'] * 20) if row['Z_Diff'] > 1.0 else 0)
-        p_buy, p_sell = (prob_buy/(prob_buy+prob_sell))*100, (prob_sell/(prob_buy+prob_sell))*100
+   with tab1:
+        st.subheader(f"Plan Táctico - {nombre} (05:00 - 06:00 AM)")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Z-Diff", f"{row['Z_Diff']:.2f}")
+        c2.metric("Skewness", f"{row['Skew']:.2f}")
+        c3.metric("R2 Calidad", f"{row['R2']:.3f}")
         
-        c1, c2 = st.columns(2)
-        c1.markdown(f'<div class="prob-box" style="color:#00cc96; border-color:#00cc96;"><h4>Probabilidad COMPRA</h4><h2>{p_buy:.1f}%</h2></div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="prob-box" style="color:#ff4b4b; border-color:#ff4b4b;"><h4>Probabilidad VENTA</h4><h2>{p_sell:.1f}%</h2></div>', unsafe_allow_html=True)
-        
-        # PLAYBOOK RESTAURADO
-        tipo_strat = "TREND FOLLOWING" if hurst > 0.55 else "MEAN REVERSION"
-        st.markdown(f'<div class="strategy-card"><h3>📋 Playbook: {tipo_strat}</h3>'
-                    f'<p><b>Hurst Exponent:</b> {hurst:.2f} | <b>Z-Diff Actual:</b> {row["Z_Diff"]:.2f}<br>'
-                    f'<i>Estrategia recomendada: {"Comprar rupturas" if hurst > 0.55 else "Vender excesos / Comprar suelos"}</i></p></div>', unsafe_allow_html=True)
-        
+        if abs(row['Z_Diff']) > 1.0 and row['R2'] > 0.05:
+            color = "#00ff00" if row['Z_Diff'] < -1.0 else "#ff0000"
+            st.markdown(f"<div class='diag-box' style='border-color:{color};'><h3>DISPARAR: {'LONG' if row['Z_Diff'] < -1.0 else 'SHORT'}</h3>"
+                        f"Precio: <b>{row['Close']:.4f}</b><br>Horizonte: 1-3 días</div>", unsafe_allow_html=True)
+        else:
+            st.info("Esperando confluencia de alta calidad (Z-Diff > 1.0 & R2 > 0.05)")
+
         fig = go.Figure(data=[go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'])])
         st.plotly_chart(fig.update_layout(height=400, template="plotly_dark", xaxis_rangeslider_visible=False), use_container_width=True)
 
