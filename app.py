@@ -172,7 +172,7 @@ if data is not None:
 else:
     st.error("Error al conectar con la API.")
 
-with tab8:
+with tab6:
     st.subheader("🧮 Risk Manager (RoboForex ECN Edition)")
     
     c_1, c_2 = st.columns(2)
