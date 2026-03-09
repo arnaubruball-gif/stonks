@@ -170,3 +170,58 @@ if data is not None:
         st.plotly_chart(fig_cam.update_layout(height=500, template="plotly_dark", xaxis_rangeslider_visible=False), use_container_width=True)
 else:
     st.error("Error al conectar con la API.")
+
+with tab8:
+    st.subheader("🧮 Risk Manager (RoboForex ECN Edition)")
+    
+    c_1, c_2 = st.columns(2)
+    
+    with c_1:
+        balance = st.number_input("Balance de la Cuenta (USD)", value=1000.0, step=100.0)
+        riesgo_pct = st.slider("Riesgo por Operación (%)", 0.1, 5.0, 1.0, 0.1)
+        stop_loss_pips = st.number_input("Stop Loss en Pips / Puntos", value=10.0, step=1.0)
+        
+    with c_2:
+        # Menú dinámico según los activos de RoboForex
+        activo_rf = st.selectbox("Activo a Operar:", [
+            "Forex (Majors/Minors)", 
+            "Oro (XAUUSD)", 
+            "Petróleo (WTI/Brent)", 
+            "Crypto (BTC/ETH)",
+            "Indices (US30/DE40)"
+        ])
+        
+        # Lógica de Valor de Contrato de RoboForex ECN
+        if activo_rf == "Forex (Majors/Minors)":
+            pip_value = 10.0 # 1 lote = $10/pip
+        elif activo_rf == "Oro (XAUUSD)":
+            pip_value = 1.0  # En RoboForex, 1 lote de Oro suele ser 100 onzas ($1 por cada 0.01 de movimiento)
+        elif activo_rf == "Indices (US30/DE40)":
+            pip_value = 1.0  # Depende del contrato, pero suele ser $1 por punto por lote
+        else:
+            pip_value = 1.0
+
+    # CÁLCULO PROFESIONAL
+    riesgo_usd = balance * (riesgo_pct / 100)
+    
+    # Fórmula: Lote = Riesgo USD / (SL Pips * Valor del Pip)
+    if stop_loss_pips > 0:
+        lotes_final = riesgo_usd / (stop_loss_pips * pip_value)
+        # RoboForex ECN permite microlotes (0.01)
+        lotes_final = max(0.01, round(lotes_final, 2))
+    else:
+        lotes_final = 0.0
+
+    st.markdown("---")
+    res1, res2, res3 = st.columns(3)
+    
+    with res1:
+        st.metric("Pérdida Máxima", f"${riesgo_usd:.2f}")
+    with res2:
+        st.metric("Lotaje Sugerido", f"{lotes_final}")
+    with res3:
+        # Recomendación de Apalancamiento para RoboForex
+        st.write(f"**Consejo ECN:**")
+        st.caption(f"Para un SL de {stop_loss_pips} pips, usa {lotes_final} lotes para mantener el riesgo bajo control.")
+
+    st.warning("⚠️ Nota: En RoboForex ECN, recuerda sumar la comisión fija por lote al calcular tu breakeven.")
