@@ -118,7 +118,8 @@ data = get_final_data(assets[cat][nombre], temp)
 
 if data is not None:
     row = data.iloc[-1]
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🎯 Sniper Ejecución", "🕵️ Diagnóstico", "🧬 Historial Flujo", "🔗 Absorción Pro", "🏰 Camarilla"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🎯 Sniper Ejecución", "🕵️ Diagnóstico", "🧬 Historial Flujo", "🔗 Absorción Pro", "🏰 Camarilla", "🧮 RISK MGR"
+])
 
     with tab1:
         st.subheader(f"Centro de Operaciones - {nombre} (05:00 - 06:00 AM)")
