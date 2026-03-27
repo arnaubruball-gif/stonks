@@ -65,15 +65,31 @@ TF_LABEL    = "H4"
 H4_PER_DAY  = 6
 TRADING_DAYS= 252
 
+# Futures cotizan ~23h/día — sin gaps de mercado cerrado
+# Spot indices (^GSPC etc) solo tienen datos en horario NY
 QUICK_MAP = {
-    "EUR/USD":    ("EURUSD=X", "forex"),
-    "GBP/USD":    ("GBPUSD=X", "forex"),
-    "USD/JPY":    ("USDJPY=X", "forex"),
-    "XAU/USD 🥇": ("GC=F",     "commodity"),
-    "S&P 500":    ("^GSPC",    "index"),
-    "DAX 40":     ("^GDAXI",   "index"),
-    "NASDAQ":     ("^IXIC",    "index"),
-    "— Manual —": ("",         "forex"),
+    "EUR/USD":          ("EURUSD=X",  "forex"),
+    "GBP/USD":          ("GBPUSD=X",  "forex"),
+    "USD/JPY":          ("USDJPY=X",  "forex"),
+    "XAU/USD 🥇":       ("GC=F",      "commodity"),
+    "S&P 500 🔄":       ("ES=F",      "index"),    # Futuro S&P — 23h/día
+    "NASDAQ 🔄":        ("NQ=F",      "index"),    # Futuro Nasdaq — 23h/día
+    "DOW JONES 🔄":     ("YM=F",      "index"),    # Futuro Dow — 23h/día
+    "DAX 🔄":           ("FDAX=F",    "index"),    # Futuro DAX — 23h/día
+    "CRUDE OIL 🔄":     ("CL=F",      "commodity"),# Futuro WTI — 23h/día
+    "S&P 500 (spot)":   ("^GSPC",     "index"),    # Solo horario NY
+    "DAX (spot)":       ("^GDAXI",    "index"),    # Solo horario EU
+    "NASDAQ (spot)":    ("^IXIC",     "index"),    # Solo horario NY
+    "— Manual —":       ("",          "forex"),
+}
+
+# Nota: símbolos 🔄 = futuros continuos, cotizan casi 24h
+FUTURES_NOTE = {
+    "ES=F": "S&P 500 E-mini Futures",
+    "NQ=F": "Nasdaq 100 E-mini Futures",
+    "YM=F": "Dow Jones E-mini Futures",
+    "FDAX=F": "DAX Futures (Eurex)",
+    "CL=F": "Crude Oil WTI Futures",
 }
 
 # ─── SESSION STATE ────────────────────────────────────────────────────────────
@@ -312,6 +328,168 @@ Responde SOLO con este JSON exacto, sin backticks ni texto extra:
 {{"macro":0,"macro_label":"Neutral","macro_why":"1 frase","news":0,"news_label":"Neutros","news_why":"1 frase con eventos","vol":"normal","vol_label":"Normal","vol_why":"1 frase","risk_events":["evento 1","evento 2","evento 3"],"correlations":{{"USD_INDEX":"neutral","RISK_APPETITE":"neutral","BONDS":"neutral"}},"summary":"2-3 frases sobre sesgo swing {horizon}d de {ticker}"}}
 
 macro y news = entero -2 a 2 · vol = low/normal/high"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  VOLUME ENGINE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def calc_volume_profile(df: pd.DataFrame, bins: int = 40) -> dict:
+    """
+    Perfil de volumen: distribuye el volumen por niveles de precio.
+    Usa volumen real o proxy (rango × tick) para forex.
+    Calcula POC, VAH, VAL (70% del volumen).
+    """
+    c = df["Close"].values.astype(float)
+    h = df["High"].values.astype(float)
+    l = df["Low"].values.astype(float)
+    v = df["Volume"].fillna(0).values.astype(float)
+
+    # Proxy para forex (volumen = 0)
+    vol_ok = v.sum() > 0 and pd.Series(v).nunique() > 3
+    if not vol_ok:
+        rng = h - l
+        tp  = (h + l + c) / 3
+        v   = (rng / rng.mean() * tp.mean() * 1000)
+
+    price_min = l.min()
+    price_max = h.max()
+    edges     = np.linspace(price_min, price_max, bins + 1)
+    centers   = (edges[:-1] + edges[1:]) / 2
+    vol_bins  = np.zeros(bins)
+
+    # Distribuir volumen de cada vela en los bins que toca
+    for i in range(len(df)):
+        c_lo, c_hi, c_v = l[i], h[i], v[i]
+        mask = (centers >= c_lo) & (centers <= c_hi)
+        n    = mask.sum()
+        if n > 0:
+            vol_bins[mask] += c_v / n
+
+    # POC — precio con mayor volumen
+    poc_idx = int(np.argmax(vol_bins))
+    poc     = float(centers[poc_idx])
+
+    # VAH / VAL — rango del 70% del volumen alrededor del POC
+    total_vol   = vol_bins.sum()
+    target_vol  = total_vol * 0.70
+    sorted_idx  = np.argsort(vol_bins)[::-1]
+    cum_vol     = 0.0
+    va_indices  = []
+    for idx in sorted_idx:
+        if cum_vol >= target_vol:
+            break
+        cum_vol += vol_bins[idx]
+        va_indices.append(idx)
+    vah = float(centers[max(va_indices)])
+    val = float(centers[min(va_indices)])
+
+    return {
+        "centers": centers, "vol_bins": vol_bins,
+        "poc": poc, "vah": vah, "val": val,
+        "total_vol": total_vol, "vol_ok": vol_ok,
+        "price_min": price_min, "price_max": price_max,
+    }
+
+
+def calc_vwap(df: pd.DataFrame) -> pd.Series:
+    """VWAP rolling de la sesión (desde inicio del dataframe)."""
+    tp  = (df["High"] + df["Low"] + df["Close"]) / 3
+    v   = df["Volume"].fillna(0)
+    vol_ok = v.sum() > 0 and v.nunique() > 3
+    if not vol_ok:
+        rng = df["High"] - df["Low"]
+        v   = (rng / rng.mean() * tp.mean() * 1000).fillna(1.0)
+    cum_tpv = (tp * v).cumsum()
+    cum_v   = v.cumsum()
+    return cum_tpv / cum_v.replace(0, np.nan)
+
+
+def calc_volume_delta(df: pd.DataFrame) -> pd.Series:
+    """
+    Volume Delta aproximado: volumen alcista - bajista por vela.
+    Sin datos de tick usamos la posición del cierre en el rango como proxy.
+    """
+    v   = df["Volume"].fillna(0).values.astype(float)
+    c   = df["Close"].values.astype(float)
+    h   = df["High"].values.astype(float)
+    l   = df["Low"].values.astype(float)
+    vol_ok = v.sum() > 0 and pd.Series(v).nunique() > 3
+
+    if vol_ok:
+        # Proxy: % del rango que es comprador
+        rng = h - l
+        rng[rng == 0] = 1e-10
+        buy_pct  = (c - l) / rng          # 0=todo vendedor, 1=todo comprador
+        sell_pct = 1 - buy_pct
+        delta    = (buy_pct - sell_pct) * v
+    else:
+        # Forex: usa variación de precio como proxy
+        delta = pd.Series(c).diff().fillna(0).values
+        delta = delta * abs(delta) * 1000  # amplificar señal
+
+    return pd.Series(delta, index=df.index)
+
+
+def calc_volume_anomalies(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Detecta anomalías de volumen:
+    - Volumen > 2σ sobre la media = spike
+    - Volumen alto + vela pequeña = absorción (institucional)
+    - Volumen bajo + vela grande = ruptura sin volumen (sospechosa)
+    """
+    v     = df["Volume"].fillna(0).values.astype(float)
+    c     = df["Close"].values.astype(float)
+    h     = df["High"].values.astype(float)
+    l     = df["Low"].values.astype(float)
+    vol_ok = v.sum() > 0 and pd.Series(v).nunique() > 3
+
+    if not vol_ok:
+        rng = h - l
+        tp  = (h + l + c) / 3
+        v   = (rng / rng.mean() * tp.mean() * 1000)
+
+    v_mean = pd.Series(v).rolling(20, min_periods=5).mean().values
+    v_std  = pd.Series(v).rolling(20, min_periods=5).std().values
+    v_std[v_std == 0] = 1
+
+    body   = np.abs(c - np.roll(c, 1))
+    rng_v  = h - l
+    rng_v[rng_v == 0] = 1e-10
+    body_pct = body / rng_v  # % del rango que es cuerpo
+
+    anomaly_type  = []
+    anomaly_score = []
+
+    for i in range(len(df)):
+        z = (v[i] - v_mean[i]) / v_std[i] if not np.isnan(v_mean[i]) else 0
+        bp = body_pct[i]
+
+        if z > 2.5 and bp < 0.3:
+            at = "ABSORCIÓN"    # Volumen muy alto, vela pequeña → institucional absorbiendo
+            sc = min(abs(z), 5)
+        elif z > 2.5:
+            at = "SPIKE VOLUMEN" # Volumen muy alto con movimiento fuerte
+            sc = min(abs(z), 5)
+        elif z > 1.8 and bp > 0.7:
+            at = "MOMENTUM"     # Volumen alto + cuerpo grande → impulso real
+            sc = min(abs(z), 4)
+        elif z < -1.5 and bp > 0.6:
+            at = "RUPTURA SECA" # Volumen bajo + cuerpo grande → ruptura sospechosa
+            sc = min(abs(z), 3)
+        else:
+            at = "NORMAL"
+            sc = 0
+
+        anomaly_type.append(at)
+        anomaly_score.append(sc)
+
+    df_out = df.copy()
+    df_out["vol_z"]     = (v - v_mean) / v_std
+    df_out["anomaly"]   = anomaly_type
+    df_out["anom_score"]= anomaly_score
+    df_out["volume_eff"]= v
+    return df_out
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -563,6 +741,135 @@ def fig_markov(markov):
     return fig
 
 
+def fig_volume_profile(df, vp, vwap, delta, df_anom):
+    """Gráfico de perfil de volumen con VWAP, delta y anomalías."""
+    price = float(df["Close"].iloc[-1])
+    dec   = 1 if price>1000 else 2 if price>100 else 5
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        column_widths=[0.72, 0.28],
+        row_heights=[0.62, 0.38],
+        shared_xaxes=False,
+        horizontal_spacing=0.02, vertical_spacing=0.08,
+        specs=[[{"type":"xy"}, {"type":"bar","rowspan":2}],
+               [{"type":"bar"}, None]],
+        subplot_titles=["", "Perfil de Volumen", "Volume Delta", ""]
+    )
+
+    # ── Candlestick + VWAP ────────────────────────────────────────────────────
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"],
+        increasing_fillcolor=GREEN, increasing_line_color=GREEN,
+        decreasing_fillcolor=RED,   decreasing_line_color=RED,
+        name="H4", showlegend=False
+    ), row=1, col=1)
+
+    # VWAP
+    fig.add_trace(go.Scatter(
+        x=df.index, y=vwap,
+        line=dict(color=YELLOW, width=1.5, dash="dash"),
+        name="VWAP"
+    ), row=1, col=1)
+
+    # POC line
+    fig.add_hline(y=vp["poc"], line_color=ORANGE, line_width=2,
+                   line_dash="solid", row=1, col=1,
+                   annotation_text=f"POC {vp['poc']:.{dec}f}",
+                   annotation_font_color=ORANGE, annotation_position="right")
+
+    # VAH / VAL
+    fig.add_hrect(y0=vp["val"], y1=vp["vah"],
+                   fillcolor="rgba(0,144,255,0.07)",
+                   line_width=0, row=1, col=1)
+    fig.add_hline(y=vp["vah"], line_color="rgba(0,144,255,.5)",
+                   line_width=1, line_dash="dot", row=1, col=1,
+                   annotation_text=f"VAH {vp['vah']:.{dec}f}",
+                   annotation_font_color=BLUE, annotation_position="right")
+    fig.add_hline(y=vp["val"], line_color="rgba(0,144,255,.5)",
+                   line_width=1, line_dash="dot", row=1, col=1,
+                   annotation_text=f"VAL {vp['val']:.{dec}f}",
+                   annotation_font_color=BLUE, annotation_position="right")
+
+    # Anomaly markers
+    for _, row_d in df_anom[df_anom["anomaly"] != "NORMAL"].iterrows():
+        acolor = {
+            "ABSORCIÓN":    PURPLE,
+            "SPIKE VOLUMEN": ORANGE,
+            "MOMENTUM":     CYAN,
+            "RUPTURA SECA": YELLOW,
+        }.get(row_d["anomaly"], TEXT)
+        fig.add_trace(go.Scatter(
+            x=[row_d.name], y=[float(row_d["High"]) * 1.001],
+            mode="markers+text",
+            marker=dict(symbol="triangle-down", size=10, color=acolor),
+            text=[row_d["anomaly"][:3]], textposition="top center",
+            textfont=dict(size=8, color=acolor),
+            showlegend=False, hovertext=row_d["anomaly"]
+        ), row=1, col=1)
+
+    # ── Volume Profile (horizontal bars) ──────────────────────────────────────
+    poc_mask = vp["centers"] == vp["poc"]
+    va_mask  = (vp["centers"] >= vp["val"]) & (vp["centers"] <= vp["vah"])
+    bar_colors = []
+    for i, c in enumerate(vp["centers"]):
+        if abs(c - vp["poc"]) < (vp["price_max"]-vp["price_min"])/len(vp["centers"]):
+            bar_colors.append(ORANGE)   # POC
+        elif va_mask[i]:
+            bar_colors.append(BLUE)     # Value Area
+        else:
+            bar_colors.append(MUTED)    # fuera VA
+
+    fig.add_trace(go.Bar(
+        x=vp["vol_bins"], y=vp["centers"],
+        orientation="h",
+        marker_color=bar_colors, marker_line_width=0,
+        opacity=0.85, showlegend=False,
+        hovertemplate="Precio: %{y:.5f}<br>Vol: %{x:,.0f}<extra></extra>"
+    ), row=1, col=2)
+
+    # Price line on profile
+    fig.add_hline(y=price, line_color="rgba(255,255,255,0.6)",
+                   line_width=1.5, line_dash="dot", row=1, col=2)
+
+    # ── Volume Delta bars ─────────────────────────────────────────────────────
+    delta_colors = [GREEN if d >= 0 else RED for d in delta.values]
+    fig.add_trace(go.Bar(
+        x=df.index, y=delta.values,
+        marker_color=delta_colors, marker_line_width=0,
+        opacity=0.8, showlegend=False, name="Vol Delta"
+    ), row=2, col=1)
+    fig.add_hline(y=0, line_color="rgba(255,255,255,.2)",
+                   line_dash="dot", row=2, col=1)
+
+    # Cumulative delta line
+    cum_delta = delta.cumsum()
+    fig.add_trace(go.Scatter(
+        x=df.index, y=cum_delta.values,
+        line=dict(color=CYAN, width=1.5),
+        name="Delta Acumulado",
+        yaxis="y5"
+    ), row=2, col=1)
+
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor=BG, plot_bgcolor=S1,
+        height=640, margin=dict(l=8,r=8,t=30,b=8),
+        legend=dict(orientation="h", y=1.02, bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
+        xaxis_rangeslider_visible=False,
+        barmode="overlay",
+        yaxis5=dict(overlaying="y3", side="right", showgrid=False,
+                    showticklabels=False, title="Δ Acum."),
+    )
+    fig.update_xaxes(gridcolor=BORDER)
+    fig.update_yaxes(gridcolor=BORDER)
+    fig.update_yaxes(title_text="Precio H4", row=1, col=1)
+    fig.update_xaxes(title_text="Volumen",   row=1, col=2)
+    fig.update_yaxes(showticklabels=False,   row=1, col=2)
+    fig.update_yaxes(title_text="Delta",     row=2, col=1)
+    return fig
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SIDEBAR
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -578,7 +885,14 @@ with st.sidebar:
     quick = st.selectbox("Acceso rápido", list(QUICK_MAP.keys()))
     default_sym, default_type = QUICK_MAP[quick]
     ticker     = st.text_input("Símbolo Yahoo Finance", value=default_sym,
-                                placeholder="EURUSD=X, GC=F, ^GSPC...")
+                                placeholder="ES=F, NQ=F, GC=F, EURUSD=X...")
+
+    # Show futures note
+    if ticker in FUTURES_NOTE:
+        st.caption(f"🔄 **{FUTURES_NOTE[ticker]}** — cotiza ~23h/día")
+    elif ticker in ("^GSPC","^GDAXI","^IXIC"):
+        st.warning("⚠️ Índice spot — solo datos en horario de bolsa. Usa `ES=F`, `NQ=F` o `FDAX=F` para datos continuos 23h.", icon="⏰")
+
     asset_type = st.selectbox("Tipo",
                                ["forex","index","commodity","stock","crypto"],
                                index=["forex","index","commodity","stock","crypto"].index(default_type))
@@ -658,6 +972,12 @@ if run_btn and st.session_state.df is not None:
         adj_bull  = float(np.clip(np.mean(final>price)*100 + ctx_boost, 10, 90))
         adj_bear  = 100 - adj_bull
 
+        # Volume models
+        vol_profile = calc_volume_profile(df)
+        vwap_series = calc_vwap(df)
+        delta_series= calc_volume_delta(df)
+        df_anom     = calc_volume_anomalies(df)
+
         st.session_state.results = dict(
             price=price, last_z=last_z, last_rmf=float(df["rmf"].iloc[-1]),
             adj_bull=adj_bull, adj_bear=adj_bear,
@@ -670,6 +990,11 @@ if run_btn and st.session_state.df is not None:
             p80 = float(np.percentile(final, 80)),
             p8  = float(np.percentile(final, 8)),
             p92 = float(np.percentile(final, 92)),
+            # Volume
+            vol_profile  = vol_profile,
+            vwap_series  = vwap_series,
+            delta_series = delta_series,
+            df_anom      = df_anom,
         )
         st.session_state.macro_prompt = build_macro_prompt(ticker, asset_type, horizon)
 
@@ -722,10 +1047,11 @@ kpi(h6, "Markov — mañana",
 # ═══════════════════════════════════════════════════════════════════════════════
 #  TABS
 # ═══════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "① DIRECCIONALIDAD — Order Flow · Markov · MC",
     "② VOLATILIDAD — Cono · ATR · Distribución",
-    "③ MACRO — Contexto · Eventos · Correlaciones",
+    "③ VOLUMEN — Perfil · Delta · VWAP · Anomalías",
+    "④ MACRO — Contexto · Eventos · Correlaciones",
 ])
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -916,6 +1242,177 @@ with tab2:
 
 # ─────────────────────────────────────────────────────────────────────────────
 with tab3:
+    vp   = r["vol_profile"]
+    vwap = r["vwap_series"]
+    delt = r["delta_series"]
+    danom= r["df_anom"]
+    df   = st.session_state.df
+    price_now = r["price"]
+    dec  = 1 if price_now>1000 else 2 if price_now>100 else 4
+
+    # KPIs
+    poc_dist = (price_now - vp["poc"]) / price_now * 100
+    vwap_dist= (price_now - float(vwap.iloc[-1])) / price_now * 100
+    cum_delta= float(delt.sum())
+    n_spikes = int((danom["anomaly"].isin(["ABSORCIÓN","SPIKE VOLUMEN"])).sum())
+    n_abs    = int((danom["anomaly"] == "ABSORCIÓN").sum())
+    n_dry    = int((danom["anomaly"] == "RUPTURA SECA").sum())
+
+    va1,va2,va3,va4,va5,va6 = st.columns(6)
+    kpi(va1, "POC (Máx. Volumen)",
+        f"{vp['poc']:.{dec}f}",
+        f"{'▲' if price_now>vp['poc'] else '▼'} {abs(poc_dist):.3f}% del precio",
+        GREEN if price_now > vp["poc"] else RED)
+    kpi(va2, "Value Area High",   f"{vp['vah']:.{dec}f}", "70% del volumen", BLUE)
+    kpi(va3, "Value Area Low",    f"{vp['val']:.{dec}f}", "70% del volumen", BLUE)
+    kpi(va4, "VWAP",
+        f"{float(vwap.iloc[-1]):.{dec}f}",
+        f"{'Por encima' if price_now>float(vwap.iloc[-1]) else 'Por debajo'} del VWAP",
+        GREEN if price_now > float(vwap.iloc[-1]) else RED)
+    kpi(va5, "Delta Acumulado",
+        f"{cum_delta:+,.0f}",
+        "comprador (+) / vendedor (−)",
+        GREEN if cum_delta > 0 else RED)
+    kpi(va6, "Anomalías",
+        f"{n_spikes} spikes · {n_abs} absorción · {n_dry} seca",
+        "velas con volumen anómalo", ORANGE if n_spikes > 0 else MUTED)
+
+    st.markdown(f"#### 📊 {ticker} H4 — Perfil de Volumen · VWAP · Volume Delta")
+    fig_vol = fig_volume_profile(df, vp, vwap, delt, danom)
+    st.plotly_chart(fig_vol, use_container_width=True)
+
+    # Interpretación POC / VA
+    col_poc, col_vwap = st.columns(2)
+    with col_poc:
+        price_in_va = vp["val"] <= price_now <= vp["vah"]
+        price_above_va = price_now > vp["vah"]
+        price_below_va = price_now < vp["val"]
+        if price_in_va:
+            poc_interp = f"""Precio dentro del <b>Value Area</b> (entre VAL {vp['val']:.{dec}f} y VAH {vp['vah']:.{dec}f}).
+            El 70% del volumen se negoció en esta zona. <b>Mercado en equilibrio</b> — sin dirección institucional clara.
+            El precio tiende a regresar al POC ({vp['poc']:.{dec}f}) cuando está en VA."""
+            poc_color = YELLOW
+        elif price_above_va:
+            poc_interp = f"""Precio <b>por encima del Value Area</b> (VAH {vp['vah']:.{dec}f}).
+            Los compradores han tomado el control sacando el precio de la zona de mayor volumen.
+            El VAH actúa como <b>soporte</b> en retrocesos. Si el precio regresa al VA es señal de debilidad alcista."""
+            poc_color = GREEN
+        else:
+            poc_interp = f"""Precio <b>por debajo del Value Area</b> (VAL {vp['val']:.{dec}f}).
+            Los vendedores han sacado el precio de la zona de acuerdo. El VAL actúa como <b>resistencia</b>.
+            Si el precio regresa al VA sin volumen es señal de trampa bajista."""
+            poc_color = RED
+
+        st.markdown(f"""<div class='entry-box' style='border-left-color:{poc_color}'>
+            <div style='font-size:9px;letter-spacing:3px;color:{poc_color};
+                text-transform:uppercase;margin-bottom:8px'>📍 POC · VALUE AREA</div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.8'>{poc_interp}</div>
+        </div>""", unsafe_allow_html=True)
+
+    with col_vwap:
+        vwap_val = float(vwap.iloc[-1])
+        if price_now > vwap_val * 1.002:
+            vwap_interp = f"""Precio <b>por encima del VWAP</b> ({vwap_val:.{dec}f}) en {vwap_dist:.3f}%.
+            Los compradores están pagando por encima del precio medio ponderado por volumen.
+            El VWAP actúa como <b>soporte dinámico</b>. Institucionales que compraron en el día están en beneficio."""
+            vwap_color = GREEN
+        elif price_now < vwap_val * 0.998:
+            vwap_interp = f"""Precio <b>por debajo del VWAP</b> ({vwap_val:.{dec}f}) en {abs(vwap_dist):.3f}%.
+            Los vendedores dominan — el precio medio ponderado está por encima del actual.
+            El VWAP actúa como <b>resistencia dinámica</b>. Posiciones largas del día están en pérdida."""
+            vwap_color = RED
+        else:
+            vwap_interp = f"""Precio <b>en el VWAP</b> ({vwap_val:.{dec}f}) — zona de equilibrio.
+            Compradores y vendedores están igualados en precio medio. Sin dirección institucional clara.
+            Espera separación del VWAP para tomar posición."""
+            vwap_color = YELLOW
+
+        st.markdown(f"""<div class='entry-box' style='border-left-color:{vwap_color}'>
+            <div style='font-size:9px;letter-spacing:3px;color:{vwap_color};
+                text-transform:uppercase;margin-bottom:8px'>📈 VWAP</div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.8'>{vwap_interp}</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
+    # Volume Delta interpretation
+    st.markdown("#### ⚡ Volume Delta — Presión Compradora vs Vendedora")
+    recent_delta  = delt.iloc[-6:].sum()   # últimas 6 velas H4 = 1 día
+    delta_trend   = "compradora" if recent_delta > 0 else "vendedora"
+    delta_color   = GREEN if recent_delta > 0 else RED
+    delta_strength= abs(recent_delta) / (abs(delt).mean() + 1e-10)
+
+    dc1, dc2, dc3 = st.columns(3)
+    kpi(dc1, "Delta último día (6v H4)",
+        f"{recent_delta:+,.0f}",
+        f"Presión {delta_trend}", delta_color)
+    kpi(dc2, "Fuerza del delta",
+        f"{delta_strength:.1f}×",
+        "vs media histórica", ORANGE if delta_strength > 2 else MUTED)
+    kpi(dc3, "Delta acumulado total",
+        f"{cum_delta:+,.0f}",
+        "desde inicio del período", GREEN if cum_delta > 0 else RED)
+
+    st.markdown(f"""<div class='entry-box'>
+        <div style='font-size:9px;letter-spacing:3px;color:{CYAN};
+            text-transform:uppercase;margin-bottom:8px'>⚡ DIAGNÓSTICO VOLUME DELTA</div>
+        <div style='font-size:12px;color:{TEXT};line-height:1.8'>
+        Delta acumulado del período: <b style='color:{GREEN if cum_delta>0 else RED}'>{cum_delta:+,.0f}</b>
+        — presión {'compradora dominante' if cum_delta>0 else 'vendedora dominante'} en el período analizado.<br>
+        Último día ({recent_delta:+,.0f}): {'Compradores acelerando' if recent_delta>0 and cum_delta>0 else
+        'Vendedores acelerando' if recent_delta<0 and cum_delta<0 else
+        'Divergencia: delta reciente va en contra del acumulado — posible giro inminente'}.<br>
+        {'⚠️ <b>Divergencia Delta:</b> el delta reciente contradice el acumulado. Señal de posible reversión.' if (recent_delta>0) != (cum_delta>0) else ''}
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
+    # Anomaly table
+    st.markdown("#### 🔍 Registro de Anomalías de Volumen")
+    anom_df = danom[danom["anomaly"] != "NORMAL"][
+        ["Open","High","Low","Close","volume_eff","vol_z","anomaly","anom_score"]
+    ].copy().tail(20)
+
+    if len(anom_df) > 0:
+        anom_df.columns = ["Open","High","Low","Close","Vol. Efectivo","Z-Score Vol","Tipo","Score"]
+        anom_df = anom_df.round({"Open":dec,"High":dec,"Low":dec,"Close":dec,
+                                  "Vol. Efectivo":0,"Z-Score Vol":2,"Score":1})
+
+        def color_anomaly(val):
+            colors = {"ABSORCIÓN": f"color:{PURPLE}",
+                      "SPIKE VOLUMEN": f"color:{ORANGE}",
+                      "MOMENTUM": f"color:{CYAN}",
+                      "RUPTURA SECA": f"color:{YELLOW}"}
+            return colors.get(val, f"color:{MUTED}")
+
+        def color_zscore(val):
+            if val > 2.5:   return f"color:{ORANGE};font-weight:bold"
+            elif val > 1.8: return f"color:{YELLOW}"
+            elif val < -1.5:return f"color:{CYAN}"
+            return f"color:{MUTED}"
+
+        styled = (anom_df.style
+                  .applymap(color_anomaly, subset=["Tipo"])
+                  .applymap(color_zscore,  subset=["Z-Score Vol"]))
+        st.dataframe(styled, use_container_width=True)
+
+        # Legend
+        st.markdown(f"""<div style='font-size:10px;color:{MUTED};line-height:2;margin-top:8px'>
+        <span style='color:{PURPLE}'>■ ABSORCIÓN</span> — Volumen muy alto + vela pequeña. Institucional absorbiendo oferta/demanda.
+        &nbsp;·&nbsp;
+        <span style='color:{ORANGE}'>■ SPIKE VOLUMEN</span> — Pico de volumen extremo + movimiento fuerte. Decisión institucional.
+        &nbsp;·&nbsp;
+        <span style='color:{CYAN}'>■ MOMENTUM</span> — Volumen alto + cuerpo grande. Impulso real con confirmación de volumen.
+        &nbsp;·&nbsp;
+        <span style='color:{YELLOW}'>■ RUPTURA SECA</span> — Movimiento grande sin volumen. Ruptura sospechosa — puede revertir.
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.info("No se detectaron anomalías de volumen significativas en el período analizado.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+with tab4:
     st.markdown("### 🌐 Contexto Macro — Prompt para Gemini / ChatGPT")
 
     with st.expander("📋 Copia este prompt → pégalo en Gemini/ChatGPT → pega la respuesta abajo",
