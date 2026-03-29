@@ -493,6 +493,247 @@ def calc_volume_anomalies(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  SUMMARY ENGINE — Puntuación agregada multi-modelo
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def build_summary(r: dict, ctx: dict) -> dict:
+    """
+    Agrega todas las señales en una puntuación direccional unificada.
+    Retorna score -100 a +100, señales individuales, zonas clave de volumen,
+    y un veredicto operativo con nivel de convicción.
+    """
+    price    = r["price"]
+    zctx     = r["zdiff_ctx"]
+    vdata    = r["vol_data"]
+    mk       = r["markov"]
+    vp       = r["vol_profile"]
+    vwap     = r["vwap_series"]
+    delt     = r["delta_series"]
+    adj_bull = r["adj_bull"]
+    macro    = ctx.get("macro", 0) if ctx else 0
+    news     = ctx.get("news",  0) if ctx else 0
+
+    signals = []
+
+    # ── 1. DIRECCIONALIDAD — Monte Carlo (peso 25) ────────────────────────────
+    mc_score = (adj_bull - 50) * 0.5          # -25 a +25
+    mc_label = ("Alcista" if adj_bull >= 60
+                else "Bajista" if adj_bull <= 40 else "Neutral")
+    mc_color = GREEN if adj_bull >= 60 else RED if adj_bull <= 40 else YELLOW
+    signals.append({
+        "categoria": "Monte Carlo",
+        "icono": "🎲",
+        "valor": f"P={adj_bull:.1f}%",
+        "label": mc_label,
+        "color": mc_color,
+        "score": mc_score,
+        "peso":  25,
+        "detalle": f"Monte Carlo GBM proyecta {adj_bull:.1f}% de probabilidad alcista en el horizonte."
+    })
+
+    # ── 2. ORDER FLOW Z-DIFF (peso 25) ───────────────────────────────────────
+    z = r["last_z"]
+    z_bull = zctx.get("bull")
+    if z_bull is True:     z_score = min(abs(z), 2.5) / 2.5 * 25
+    elif z_bull is False:  z_score = -min(abs(z), 2.5) / 2.5 * 25
+    else:                   z_score = 0
+    z_label = zctx.get("signal", "Neutral")
+    z_color = zctx.get("color", YELLOW)
+    signals.append({
+        "categoria": "Z-Diff Order Flow",
+        "icono": "⚡",
+        "valor": f"{z:.3f}",
+        "label": z_label,
+        "color": z_color,
+        "score": z_score,
+        "peso":  25,
+        "detalle": zctx.get("expl", "—")
+    })
+
+    # ── 3. MARKOV (peso 15) ───────────────────────────────────────────────────
+    nd  = mk["next_day"]
+    mk_bull = float(nd[2])    # P(ALCISTA)
+    mk_bear = float(nd[0])    # P(BAJISTA)
+    mk_score = (mk_bull - mk_bear) * 15
+    mk_dom   = mk["labels"][int(np.argmax(nd))]
+    mk_color = GREEN if mk_bull > mk_bear else RED if mk_bear > mk_bull else YELLOW
+    signals.append({
+        "categoria": "Cadena de Markov",
+        "icono": "🔗",
+        "valor": f"↑{mk_bull*100:.0f}% ↓{mk_bear*100:.0f}%",
+        "label": f"→ {mk_dom} mañana",
+        "color": mk_color,
+        "score": mk_score,
+        "peso":  15,
+        "detalle": f"Probabilidad de transición: {mk_dom} con {max(nd)*100:.0f}% de probabilidad."
+    })
+
+    # ── 4. VOLATILIDAD — Régimen (peso 10) ───────────────────────────────────
+    reg = vdata["vol_regime"]
+    if reg == "COMPRESIÓN":
+        # Compresión: señal de movimiento próximo, dirección incierta
+        vol_score = 0   # no añade dirección
+        vol_label = "Compresión — Ruptura Próxima"
+        vol_color = CYAN
+        vol_det   = f"Volatilidad corta ({vdata['rv_short']*100:.1f}%) muy inferior a la larga ({vdata['rv_long']*100:.1f}%). Movimiento inminente — tamaño reducido."
+    elif reg == "EXPANSIÓN":
+        # En expansión el momentum ya tiene dirección capturada por Z-Diff
+        vol_score = 0
+        vol_label = "Expansión — Aumenta SL/TP"
+        vol_color = ORANGE
+        vol_det   = f"Volatilidad en expansión. Aumenta stops y reduce tamaño."
+    else:
+        vol_score = 0
+        vol_label = "Normal — Parámetros estándar"
+        vol_color = YELLOW
+        vol_det   = "Régimen estable. Usa ATR como referencia directa."
+    signals.append({
+        "categoria": "Régimen Volatilidad",
+        "icono": "📊",
+        "valor": f"{vdata['rv_current']*100:.1f}%",
+        "label": vol_label,
+        "color": vol_color,
+        "score": vol_score,
+        "peso":  10,
+        "detalle": vol_det
+    })
+
+    # ── 5. VOLUMEN — Posición respecto a zonas clave (peso 15) ───────────────
+    poc, vah, val_v = vp["poc"], vp["vah"], vp["val"]
+    vwap_now = float(vwap.iloc[-1])
+    cum_delta = float(delt.sum())
+    recent_delta = float(delt.iloc[-6:].sum())
+
+    # Posición precio vs zonas
+    in_va     = val_v <= price <= vah
+    above_va  = price > vah
+    below_va  = price < val_v
+    above_poc = price > poc
+    above_vwap= price > vwap_now
+    delta_bull= cum_delta > 0 and recent_delta > 0
+
+    if above_va and above_vwap and delta_bull:
+        vol_dir_score = 15; vol_dir_lbl = "Alcista — precio sobre VA+VWAP"
+        vol_dir_col   = GREEN
+        vol_dir_det   = f"Precio {price:.4f} sobre VAH {vah:.4f} y VWAP {vwap_now:.4f} con delta comprador. Estructura de volumen alcista."
+    elif above_va and not delta_bull:
+        vol_dir_score = 5;  vol_dir_lbl = "Alcista débil — VA pero delta mixto"
+        vol_dir_col   = "#69f0ae"
+        vol_dir_det   = f"Precio sobre VAH pero delta vendedor reciente. Posible distribución en techo."
+    elif below_va and not above_vwap and not delta_bull:
+        vol_dir_score = -15; vol_dir_lbl = "Bajista — precio bajo VA+VWAP"
+        vol_dir_col   = RED
+        vol_dir_det   = f"Precio {price:.4f} bajo VAL {val_v:.4f} y VWAP {vwap_now:.4f} con delta vendedor. Estructura bajista."
+    elif below_va and delta_bull:
+        vol_dir_score = -5; vol_dir_lbl = "Bajista débil — bajo VA pero delta mixto"
+        vol_dir_col   = "#ff6b6b"
+        vol_dir_det   = f"Precio bajo VAL pero delta comprador reciente. Posible acumulación en suelo."
+    elif in_va and above_poc:
+        vol_dir_score = 8;  vol_dir_lbl = "Neutro-alcista — en VA sobre POC"
+        vol_dir_col   = "#69f0ae"
+        vol_dir_det   = f"Precio en Value Area por encima del POC ({poc:.4f}). Zona de equilibrio con ligero sesgo alcista."
+    elif in_va and not above_poc:
+        vol_dir_score = -8; vol_dir_lbl = "Neutro-bajista — en VA bajo POC"
+        vol_dir_col   = "#ff6b6b"
+        vol_dir_det   = f"Precio en Value Area por debajo del POC ({poc:.4f}). Zona de equilibrio con ligero sesgo bajista."
+    else:
+        vol_dir_score = 0; vol_dir_lbl = "Neutral"
+        vol_dir_col   = YELLOW
+        vol_dir_det   = "Sin señal de volumen clara."
+
+    signals.append({
+        "categoria": "Volumen & Zonas Clave",
+        "icono": "📦",
+        "valor": f"POC {poc:.4f}",
+        "label": vol_dir_lbl,
+        "color": vol_dir_col,
+        "score": vol_dir_score,
+        "peso":  15,
+        "detalle": vol_dir_det
+    })
+
+    # ── 6. MACRO (peso 10) ────────────────────────────────────────────────────
+    macro_score = (macro + news) / 4 * 10   # -10 a +10
+    macro_label = ctx.get("macro_label", "Sin contexto") if ctx else "Sin contexto macro"
+    macro_color = GREEN if macro_score > 2 else RED if macro_score < -2 else YELLOW
+    signals.append({
+        "categoria": "Macro + Noticias",
+        "icono": "🌐",
+        "valor": f"M:{macro:+d} N:{news:+d}",
+        "label": macro_label,
+        "color": macro_color,
+        "score": macro_score,
+        "peso":  10,
+        "detalle": ctx.get("summary", "Sin contexto macro. Añade contexto en Tab ④.") if ctx else "Sin contexto macro. Añade contexto en Tab ④."
+    })
+
+    # ── SCORE TOTAL ───────────────────────────────────────────────────────────
+    total_score = sum(s["score"] for s in signals)
+    total_score = float(np.clip(total_score, -100, 100))
+
+    # Alineación de señales (cuántas apuntan en la misma dirección)
+    bullish_sigs = sum(1 for s in signals if s["score"] > 2)
+    bearish_sigs = sum(1 for s in signals if s["score"] < -2)
+    neutral_sigs = len(signals) - bullish_sigs - bearish_sigs
+    alignment    = max(bullish_sigs, bearish_sigs) / len(signals)
+
+    # Convicción
+    if abs(total_score) >= 55 and alignment >= 0.75:
+        conviction = "ALTA"; conviction_color = GREEN if total_score > 0 else RED
+    elif abs(total_score) >= 35 and alignment >= 0.5:
+        conviction = "MEDIA"; conviction_color = ORANGE
+    else:
+        conviction = "BAJA"; conviction_color = MUTED
+
+    # Veredicto operativo
+    if total_score >= 40 and conviction in ("ALTA","MEDIA"):
+        verdict       = "OPERAR — LARGO"
+        verdict_color = GREEN
+        verdict_icon  = "▲"
+    elif total_score <= -40 and conviction in ("ALTA","MEDIA"):
+        verdict       = "OPERAR — CORTO"
+        verdict_color = RED
+        verdict_icon  = "▼"
+    elif abs(total_score) >= 25:
+        verdict       = "MONITORIZAR"
+        verdict_color = ORANGE
+        verdict_icon  = "◉"
+    else:
+        verdict       = "NO OPERAR"
+        verdict_color = MUTED
+        verdict_icon  = "—"
+
+    # Zonas clave de volumen
+    key_zones = []
+    key_zones.append({"nivel": poc,     "tipo": "POC",  "color": ORANGE,
+                       "desc": "Mayor volumen negociado — imán de precio"})
+    key_zones.append({"nivel": vah,     "tipo": "VAH",  "color": BLUE,
+                       "desc": "Techo del 70% del volumen — resistencia clave"})
+    key_zones.append({"nivel": val_v,   "tipo": "VAL",  "color": BLUE,
+                       "desc": "Suelo del 70% del volumen — soporte clave"})
+    key_zones.append({"nivel": vwap_now,"tipo": "VWAP", "color": YELLOW,
+                       "desc": "Precio medio ponderado por volumen — soporte/resistencia dinámica"})
+    key_zones.sort(key=lambda x: x["nivel"], reverse=True)
+
+    return {
+        "signals":       signals,
+        "total_score":   total_score,
+        "verdict":       verdict,
+        "verdict_color": verdict_color,
+        "verdict_icon":  verdict_icon,
+        "conviction":    conviction,
+        "conviction_color": conviction_color,
+        "bullish_sigs":  bullish_sigs,
+        "bearish_sigs":  bearish_sigs,
+        "neutral_sigs":  neutral_sigs,
+        "alignment":     alignment,
+        "key_zones":     key_zones,
+        "vol_regime":    reg,
+        "poc": poc, "vah": vah, "val": val_v, "vwap": vwap_now,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  CHARTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1047,12 +1288,238 @@ kpi(h6, "Markov — mañana",
 # ═══════════════════════════════════════════════════════════════════════════════
 #  TABS
 # ═══════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3, tab4 = st.tabs([
+tab0, tab1, tab2, tab3, tab4 = st.tabs([
+    "⬡ RESUMEN EJECUTIVO",
     "① DIRECCIONALIDAD — Order Flow · Markov · MC",
     "② VOLATILIDAD — Cono · ATR · Distribución",
     "③ VOLUMEN — Perfil · Delta · VWAP · Anomalías",
     "④ MACRO — Contexto · Eventos · Correlaciones",
 ])
+
+# ═════════════════════════════════════════════════════════════════════════════
+with tab0:
+    ctx_now = st.session_state.context or {}
+    summ    = build_summary(r, ctx_now)
+    dec     = 1 if r["price"]>1000 else 2 if r["price"]>100 else 4
+
+    # ── VEREDICTO CENTRAL ────────────────────────────────────────────────────
+    vc = summ["verdict_color"]
+    st.markdown(f"""
+    <div style='background:{S1};border:2px solid {vc};border-radius:6px;
+        padding:28px 32px;margin-bottom:20px;text-align:center'>
+      <div style='font-size:10px;letter-spacing:4px;color:{MUTED};
+          text-transform:uppercase;margin-bottom:8px'>VEREDICTO OPERATIVO</div>
+      <div style='font-family:Rajdhani,sans-serif;font-size:52px;font-weight:700;
+          color:{vc};letter-spacing:4px;line-height:1'>{summ["verdict_icon"]} {summ["verdict"]}</div>
+      <div style='margin-top:12px;display:flex;justify-content:center;gap:32px;
+          font-size:11px;color:{MUTED}'>
+        <span>Score: <b style='color:{vc};font-size:16px'>{summ["total_score"]:+.0f}</b>/100</span>
+        <span>Convicción: <b style='color:{summ["conviction_color"]}'>{summ["conviction"]}</b></span>
+        <span>Señales: <b style='color:{GREEN}'>{summ["bullish_sigs"]} alcistas</b> · <b style='color:{RED}'>{summ["bearish_sigs"]} bajistas</b> · <b style='color:{MUTED}'>{summ["neutral_sigs"]} neutrales</b></span>
+        <span>Alineación: <b style='color:{TEXT}'>{summ["alignment"]*100:.0f}%</b></span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── SCORE BAR ─────────────────────────────────────────────────────────────
+    sc = summ["total_score"]
+    pct_pos  = max(0, sc) / 100 * 100
+    pct_neg  = max(0, -sc) / 100 * 100
+    bar_html = f"""
+    <div style='margin-bottom:20px'>
+      <div style='display:flex;justify-content:space-between;font-size:9px;
+          color:{MUTED};letter-spacing:2px;text-transform:uppercase;margin-bottom:4px'>
+        <span>BAJISTA −100</span><span>NEUTRAL</span><span>+100 ALCISTA</span>
+      </div>
+      <div style='position:relative;height:12px;background:{S1};border-radius:6px;
+          border:1px solid {BORDER};overflow:hidden'>
+        <div style='position:absolute;left:50%;top:0;bottom:0;width:2px;
+            background:{MUTED};'></div>
+        {"<div style='position:absolute;left:50%;top:0;bottom:0;width:"+str(pct_pos/2)+"%;background:"+GREEN+";border-radius:0 4px 4px 0'></div>" if sc > 0 else ""}
+        {"<div style='position:absolute;right:50%;top:0;bottom:0;width:"+str(pct_neg/2)+"%;background:"+RED+";border-radius:4px 0 0 4px'></div>" if sc < 0 else ""}
+      </div>
+    </div>"""
+    st.markdown(bar_html, unsafe_allow_html=True)
+
+    # ── SEÑALES INDIVIDUALES ─────────────────────────────────────────────────
+    st.markdown("### Señales por Modelo")
+    cols = st.columns(len(summ["signals"]))
+    for col, sig in zip(cols, summ["signals"]):
+        bar_w = abs(sig["score"]) / sig["peso"] * 100
+        bar_c = sig["color"] if sig["score"] != 0 else MUTED
+        col.markdown(f"""<div class='kpi' style='border-top:3px solid {sig["color"]}'>
+            <div style='font-size:16px;margin-bottom:4px'>{sig["icono"]}</div>
+            <div class='kpi-lbl'>{sig["categoria"]}</div>
+            <div style='font-family:Rajdhani,sans-serif;font-size:20px;font-weight:700;
+                color:{sig["color"]};line-height:1.2;margin-bottom:4px'>{sig["valor"]}</div>
+            <div style='font-size:10px;color:{sig["color"]};margin-bottom:8px'>{sig["label"]}</div>
+            <div style='height:4px;background:{BORDER};border-radius:2px;overflow:hidden;margin-bottom:6px'>
+              <div style='height:100%;width:{bar_w:.0f}%;background:{bar_c};border-radius:2px'></div>
+            </div>
+            <div style='font-size:9px;color:{MUTED}'>Aporte: <b style='color:{sig["color"]}'>{sig["score"]:+.1f}</b> / peso {sig["peso"]}</div>
+        </div>""", unsafe_allow_html=True)
+
+    # Detalles expandibles
+    with st.expander("📋 Ver razonamiento detallado de cada señal"):
+        for sig in summ["signals"]:
+            st.markdown(f"""<div style='padding:10px 14px;margin-bottom:6px;
+                background:{S0};border-left:3px solid {sig["color"]};border-radius:3px'>
+                <b style='color:{sig["color"]}'>{sig["icono"]} {sig["categoria"]}</b>
+                <span style='color:{MUTED};font-size:11px;margin-left:8px'>Score: {sig["score"]:+.1f}</span><br>
+                <span style='font-size:12px;color:{TEXT}'>{sig["detalle"]}</span>
+            </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── ZONAS CLAVE DE VOLUMEN ────────────────────────────────────────────────
+    st.markdown("### Zonas Clave de Volumen")
+    price_now = r["price"]
+
+    # Visual de niveles
+    zones    = summ["key_zones"]
+    all_levs = [z["nivel"] for z in zones] + [price_now]
+    mn_z, mx_z = min(all_levs), max(all_levs)
+    span_z   = mx_z - mn_z if mx_z != mn_z else 1e-10
+
+    zone_html = f"""<div style='background:{S0};border:1px solid {BORDER};
+        border-radius:4px;padding:16px 20px;margin-bottom:14px'>
+      <div style='font-size:9px;letter-spacing:3px;color:{MUTED};
+          text-transform:uppercase;margin-bottom:14px'>MAPA DE NIVELES — arriba = precio más alto</div>"""
+
+    # Sort all levels descending and render
+    all_items = [(z["nivel"], z["tipo"], z["color"], z["desc"]) for z in zones]
+    all_items.append((price_now, "PRECIO ACTUAL", TEXT, "Último cierre H4"))
+    all_items.sort(key=lambda x: x[0], reverse=True)
+
+    for nivel, tipo, color, desc in all_items:
+        pct   = (nivel - mn_z) / span_z * 80 + 10  # 10-90%
+        is_price = tipo == "PRECIO ACTUAL"
+        dist_pct = (price_now - nivel) / price_now * 100 if not is_price else 0
+        dist_str = f"{'▲' if dist_pct>0 else '▼'} {abs(dist_pct):.3f}%" if not is_price else "← AQUÍ"
+
+        zone_html += f"""
+        <div style='display:flex;align-items:center;gap:12px;
+            padding:{'10px 12px' if is_price else '7px 12px'};margin-bottom:4px;
+            background:{'rgba(255,255,255,0.04)' if is_price else 'transparent'};
+            border-radius:3px;{"border:1px solid "+color+";" if is_price else ""}'>
+          <div style='width:70px;font-family:Rajdhani,sans-serif;font-size:{'16px' if is_price else '13px'};
+              font-weight:700;color:{color};text-align:right'>{nivel:.{dec}f}</div>
+          <div style='flex:1;position:relative;height:6px;background:{BORDER};border-radius:3px'>
+            <div style='position:absolute;left:{100-(nivel-mn_z)/span_z*100:.0f}%;top:-3px;
+                width:{'10px' if is_price else '6px'};height:{'12px' if is_price else '8px'};
+                background:{color};border-radius:2px;transform:translateX(-50%)'></div>
+          </div>
+          <div style='width:80px;font-size:10px;color:{color};
+              font-weight:{"700" if is_price else "400"};letter-spacing:1px'>{tipo}</div>
+          <div style='width:80px;font-size:10px;color:{MUTED};text-align:right'>{dist_str}</div>
+          <div style='font-size:10px;color:{MUTED};flex:2'>{desc}</div>
+        </div>"""
+
+    zone_html += "</div>"
+    st.markdown(zone_html, unsafe_allow_html=True)
+
+    # Interpretación de zonas
+    poc, vah, val_v, vwap_now = summ["poc"], summ["vah"], summ["val"], summ["vwap"]
+    zk1, zk2 = st.columns(2)
+    with zk1:
+        # Zona de interés más cercana
+        distances = {
+            "POC":  abs(price_now - poc),
+            "VAH":  abs(price_now - vah),
+            "VAL":  abs(price_now - val_v),
+            "VWAP": abs(price_now - vwap_now),
+        }
+        nearest   = min(distances, key=distances.get)
+        nearest_d = distances[nearest] / price_now * 100
+        nearest_v = {"POC":poc,"VAH":vah,"VAL":val_v,"VWAP":vwap_now}[nearest]
+        n_color   = {"POC":ORANGE,"VAH":BLUE,"VAL":BLUE,"VWAP":YELLOW}[nearest]
+
+        st.markdown(f"""<div class='entry-box' style='border-left-color:{n_color}'>
+            <div style='font-size:9px;letter-spacing:3px;color:{n_color};
+                text-transform:uppercase;margin-bottom:8px'>📍 ZONA MÁS CERCANA</div>
+            <div style='font-family:Rajdhani,sans-serif;font-size:24px;font-weight:700;
+                color:{n_color};margin-bottom:6px'>{nearest} {nearest_v:.{dec}f}</div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.8'>
+            A <b>{nearest_d:.3f}%</b> del precio actual ({price_now:.{dec}f}).<br>
+            {"El POC actúa como imán — el precio tiende a volver a él. Zona de alta probabilidad de reacción." if nearest=="POC" else
+             "VAH es resistencia clave del Value Area. Ruptura con volumen = alcista confirmado." if nearest=="VAH" else
+             "VAL es soporte clave del Value Area. Ruptura con volumen = bajista confirmado." if nearest=="VAL" else
+             "VWAP es el nivel de referencia institucional. Por encima = largo, por debajo = corto."}
+            </div>
+        </div>""", unsafe_allow_html=True)
+
+    with zk2:
+        # Estructura de precio en el mapa de zonas
+        in_va = val_v <= price_now <= vah
+        if price_now > vah:
+            zona_txt = f"Precio <b style='color:{GREEN}'>por encima del Value Area</b> (VAH {vah:.{dec}f}). Compradores en control. El VAH se convierte en soporte. Próxima resistencia: máximos del período."
+            zona_col = GREEN
+        elif price_now < val_v:
+            zona_txt = f"Precio <b style='color:{RED}'>por debajo del Value Area</b> (VAL {val_v:.{dec}f}). Vendedores en control. El VAL se convierte en resistencia. Próximo soporte: mínimos del período."
+            zona_col = RED
+        elif price_now > poc:
+            zona_txt = f"Precio <b style='color:'#69f0ae''>en el Value Area, sobre el POC</b> ({poc:.{dec}f}). Zona de equilibrio con ligero sesgo alcista. El POC ({poc:.{dec}f}) actúa como soporte inmediato."
+            zona_col = "#69f0ae"
+        else:
+            zona_txt = f"Precio <b style='color:#ff6b6b'>en el Value Area, bajo el POC</b> ({poc:.{dec}f}). Zona de equilibrio con ligero sesgo bajista. El POC ({poc:.{dec}f}) actúa como resistencia inmediata."
+            zona_col = "#ff6b6b"
+
+        st.markdown(f"""<div class='entry-box' style='border-left-color:{zona_col}'>
+            <div style='font-size:9px;letter-spacing:3px;color:{zona_col};
+                text-transform:uppercase;margin-bottom:8px'>🗺️ ESTRUCTURA DE PRECIO</div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.8'>{zona_txt}</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── CHECKLIST OPERATIVA ───────────────────────────────────────────────────
+    st.markdown("### ✅ Checklist Operativa")
+
+    checks = [
+        (abs(summ["total_score"]) >= 40,
+         f"Score total ≥ 40 ({summ['total_score']:+.0f})",
+         "Señal de suficiente fuerza direccional"),
+        (summ["conviction"] in ("ALTA","MEDIA"),
+         f"Convicción {summ['conviction']}",
+         "Al menos 50% de señales alineadas"),
+        (abs(r["last_z"]) >= 1.5,
+         f"Z-Diff fuera de zona neutral ({r['last_z']:.3f})",
+         "Flujo institucional confirmado"),
+        (max(r["adj_bull"], r["adj_bear"]) >= 60,
+         f"Monte Carlo ≥ 60% ({max(r['adj_bull'],r['adj_bear']):.1f}%)",
+         "Probabilidad estadística suficiente"),
+        (summ["vol_regime"] != "COMPRESIÓN",
+         f"Régimen de volatilidad: {summ['vol_regime']}",
+         "No operar en compresión sin ruptura confirmada"),
+        (not in_va or abs(price_now - poc) / price_now * 100 > 0.1,
+         f"Precio alejado del POC ({poc:.{dec}f})",
+         "POC es zona de equilibrio, peor ratio R:R"),
+        (ctx_now.get("macro", 0) != 0 or ctx_now.get("news", 0) != 0,
+         "Contexto macro cargado",
+         "Añade contexto en Tab ④ para señal más precisa"),
+    ]
+
+    for ok, title, detail in checks:
+        icon  = "✅" if ok else "❌"
+        color = GREEN if ok else RED
+        st.markdown(f"""<div style='display:flex;align-items:center;gap:12px;
+            padding:8px 14px;margin-bottom:4px;background:{S0};
+            border-left:3px solid {color};border-radius:3px'>
+            <span style='font-size:16px'>{icon}</span>
+            <div>
+                <div style='font-size:12px;color:{TEXT};font-weight:500'>{title}</div>
+                <div style='font-size:10px;color:{MUTED}'>{detail}</div>
+            </div>
+        </div>""", unsafe_allow_html=True)
+
+    ok_count = sum(1 for ok, _, _ in checks if ok)
+    st.markdown(f"""<div style='text-align:center;margin-top:12px;font-size:11px;color:{MUTED}'>
+        {ok_count}/{len(checks)} criterios cumplidos
+        {"— <b style='color:"+GREEN+"'>Condiciones favorables para operar</b>" if ok_count >= 5
+         else "— <b style='color:"+ORANGE+"'>Condiciones parciales — reduce tamaño</b>" if ok_count >= 3
+         else "— <b style='color:"+RED+"'>Condiciones insuficientes — no operar</b>"}
+    </div>""", unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 with tab1:
