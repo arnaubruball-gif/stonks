@@ -1861,9 +1861,11 @@ with tab3:
             elif val < -1.5:return f"color:{CYAN}"
             return f"color:{MUTED}"
 
-        styled = (anom_df.style
-                  .applymap(color_anomaly, subset=["Tipo"])
-                  .applymap(color_zscore,  subset=["Z-Score Vol"]))
+        # pandas >= 2.1 renamed applymap to map; support both
+        _style = anom_df.style
+        _fn    = "map" if hasattr(_style, "map") else "applymap"
+        styled = (getattr(_style, _fn)(color_anomaly, subset=["Tipo"])
+                  .pipe(lambda s: getattr(s, _fn)(color_zscore, subset=["Z-Score Vol"])))
         st.dataframe(styled, use_container_width=True)
 
         # Legend
