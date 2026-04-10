@@ -449,20 +449,22 @@ def calc_volume_anomalies(df: pd.DataFrame) -> pd.DataFrame:
         tp  = (h + l + c) / 3
         v   = (rng / rng.mean() * tp.mean() * 1000)
 
-    v_mean = pd.Series(v).rolling(20, min_periods=5).mean().values
-    v_std  = pd.Series(v).rolling(20, min_periods=5).std().values
-    v_std[v_std == 0] = 1
+    v_mean = pd.Series(v).rolling(20, min_periods=5).mean().values.copy()
+    v_std  = pd.Series(v).rolling(20, min_periods=5).std().values.copy()
+    # Replace 0 and NaN in std to avoid division errors
+    v_std  = np.where((v_std == 0) | np.isnan(v_std), 1.0, v_std)
+    v_mean = np.where(np.isnan(v_mean), np.nanmean(v) if len(v) > 0 else 1.0, v_mean)
 
     body   = np.abs(c - np.roll(c, 1))
     rng_v  = h - l
-    rng_v[rng_v == 0] = 1e-10
+    rng_v  = np.where(rng_v == 0, 1e-10, rng_v)
     body_pct = body / rng_v  # % del rango que es cuerpo
 
     anomaly_type  = []
     anomaly_score = []
 
     for i in range(len(df)):
-        z = (v[i] - v_mean[i]) / v_std[i] if not np.isnan(v_mean[i]) else 0
+        z = (v[i] - v_mean[i]) / v_std[i]
         bp = body_pct[i]
 
         if z > 2.5 and bp < 0.3:
