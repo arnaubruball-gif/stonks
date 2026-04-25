@@ -1,21 +1,10 @@
 """
-QuantEdge PRO — Dashboard Cuantitativo
-=======================================
-Software de análisis cuantitativo para traders retail.
-El cliente introduce su propia Gemini API Key.
-
-Fuentes de datos:
-  • Yahoo Finance — precios H4
-  • FRED (Federal Reserve) — datos macroeconómicos gratuitos, sin key
-  • Gemini AI — análisis IA (key del cliente)
-
-Pestañas:
-  ⬡  RESUMEN EJECUTIVO
-  ①  MERCADO — Z-Diff, Markov, Monte Carlo
-  ②  VOLATILIDAD — ATR, cono, regímenes
-  ③  VOLUMEN — Perfil, VWAP, Delta
-  ④  MACRO CUANTITATIVA — tipos reales, curva, spreads
-  ⑤  ANÁLISIS IA — Gemini + contexto completo
+OrderFlow PRO — Dashboard Cuantitativo Profesional
+===================================================
+3 pestañas:
+  1. Direccionalidad — Z-Diff, Markov, MC histogram en el gráfico
+  2. Volatilidad     — ATR, cono de volatilidad, bandas de probabilidad
+  3. Macro           — Contexto, correlaciones, calendario de riesgo
 """
 
 import streamlit as st
@@ -26,14 +15,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy import stats
 from datetime import datetime, timedelta
-import requests, json, re, warnings
+import json, re, warnings
 warnings.filterwarnings("ignore")
 
-# ─── PAGE CONFIG ──────────────────────────────────────────────────────────────
+# ─── CONFIG ───────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="QuantEdge PRO",
-    page_icon="⬡",
-    layout="wide",
+    page_title="OrderFlow PRO — Dashboard",
+    page_icon="📊", layout="wide",
     initial_sidebar_state="expanded"
 )
 
@@ -41,7 +29,6 @@ st.set_page_config(
 BG     = "#04070d"
 S0     = "#060b13"
 S1     = "#0a1019"
-S2     = "#0e1520"
 BORDER = "#1a2d40"
 GREEN  = "#00e676"
 RED    = "#ff1744"
@@ -55,60 +42,64 @@ TEXT   = "#cdd9e5"
 
 st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Rajdhani:wght@600;700&display=swap');
-html,body,[class*="css"]{{font-family:'Inter',sans-serif;background:{BG};color:{TEXT};}}
-.stTabs [data-baseweb="tab-list"]{{gap:2px;background:{S1};padding:4px;border-radius:6px;border:1px solid {BORDER};}}
-.stTabs [data-baseweb="tab"]{{background:transparent;color:{MUTED};font-family:'Rajdhani',sans-serif;font-size:13px;font-weight:600;letter-spacing:1.5px;padding:8px 18px;border-radius:4px;transition:all .2s;}}
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Rajdhani:wght@600;700&display=swap');
+html,body,[class*="css"]{{font-family:'JetBrains Mono',monospace;}}
+.stTabs [data-baseweb="tab-list"]{{gap:4px;background:{S1};padding:4px;border-radius:4px;border:1px solid {BORDER};}}
+.stTabs [data-baseweb="tab"]{{background:transparent;color:{MUTED};font-family:'Rajdhani',sans-serif;
+  font-size:14px;font-weight:600;letter-spacing:2px;padding:8px 20px;border-radius:3px;}}
 .stTabs [aria-selected="true"]{{background:{BG};color:{CYAN};border-bottom:2px solid {CYAN};}}
-.stTabs [data-baseweb="tab"]:hover{{color:{TEXT};}}
-.kpi{{background:{S1};border:1px solid {BORDER};border-radius:6px;padding:16px 18px;margin-bottom:8px;transition:border-color .2s;}}
-.kpi:hover{{border-color:{MUTED};}}
-.kpi-lbl{{font-size:9px;letter-spacing:3px;text-transform:uppercase;color:{MUTED};margin-bottom:6px;font-family:'JetBrains Mono',monospace;}}
-.kpi-val{{font-family:'Rajdhani',sans-serif;font-size:26px;font-weight:700;line-height:1;}}
-.kpi-sub{{font-size:10px;color:{MUTED};margin-top:4px;font-family:'JetBrains Mono',monospace;}}
-.card{{background:{S1};border:1px solid {BORDER};border-radius:6px;padding:20px 24px;margin-bottom:12px;}}
-.signal-box{{border-radius:6px;padding:16px 20px;margin-bottom:10px;}}
-.entry-box{{background:{S0};border:1px solid {BORDER};border-left:4px solid {CYAN};border-radius:6px;padding:16px 20px;margin:10px 0;}}
-.metric-row{{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid {BORDER};}}
-.metric-row:last-child{{border-bottom:none;}}
-div[data-testid="stSidebar"]{{background:{S0};border-right:1px solid {BORDER};}}
+.kpi{{background:{S1};border:1px solid {BORDER};border-radius:4px;padding:14px 18px;margin-bottom:8px;}}
+.kpi-lbl{{font-size:9px;letter-spacing:3px;text-transform:uppercase;color:{MUTED};margin-bottom:4px;}}
+.kpi-val{{font-family:'Rajdhani',sans-serif;font-size:28px;font-weight:700;line-height:1;}}
+.kpi-sub{{font-size:10px;color:{MUTED};margin-top:3px;}}
+.signal-box{{border-radius:4px;padding:14px 18px;margin-bottom:10px;}}
+.entry-box{{background:{S0};border:1px solid {BORDER};border-left:4px solid {CYAN};
+  border-radius:4px;padding:16px 20px;margin:10px 0;}}
 </style>
 """, unsafe_allow_html=True)
 
 # ─── CONSTANTS ────────────────────────────────────────────────────────────────
-APP_NAME    = "QuantEdge PRO"
-APP_VERSION = "1.0"
+TF_INTERVAL = "4h"
+TF_PERIOD   = "60d"
+TF_LABEL    = "H4"
 H4_PER_DAY  = 6
 TRADING_DAYS= 252
-FRED_BASE   = "https://fred.stlouisfed.org/graph/fredgraph.csv?id="
 
+# Futures cotizan ~23h/día — sin gaps de mercado cerrado
+# Spot indices (^GSPC etc) solo tienen datos en horario NY
 QUICK_MAP = {
-    "EUR/USD":       ("EURUSD=X", "forex"),
-    "GBP/USD":       ("GBPUSD=X", "forex"),
-    "USD/JPY":       ("USDJPY=X", "forex"),
-    "XAU/USD 🥇":    ("GC=F",     "commodity"),
-    "S&P 500 🔄":    ("ES=F",     "index"),
-    "NASDAQ 🔄":     ("NQ=F",     "index"),
-    "DOW JONES 🔄":  ("YM=F",     "index"),
-    "DAX 🔄":        ("FDAX=F",   "index"),
-    "CRUDE OIL 🔄":  ("CL=F",     "commodity"),
-    "BTC/USD":       ("BTC-USD",  "crypto"),
-    "— Manual —":    ("",         "forex"),
+    "EUR/USD":          ("EURUSD=X",  "forex"),
+    "GBP/USD":          ("GBPUSD=X",  "forex"),
+    "USD/JPY":          ("USDJPY=X",  "forex"),
+    "XAU/USD 🥇":       ("GC=F",      "commodity"),
+    "S&P 500 🔄":       ("ES=F",      "index"),    # Futuro S&P — 23h/día
+    "NASDAQ 🔄":        ("NQ=F",      "index"),    # Futuro Nasdaq — 23h/día
+    "DOW JONES 🔄":     ("YM=F",      "index"),    # Futuro Dow — 23h/día
+    "DAX 🔄":           ("FDAX=F",    "index"),    # Futuro DAX — 23h/día
+    "CRUDE OIL 🔄":     ("CL=F",      "commodity"),# Futuro WTI — 23h/día
+    "S&P 500 (spot)":   ("^GSPC",     "index"),    # Solo horario NY
+    "DAX (spot)":       ("^GDAXI",    "index"),    # Solo horario EU
+    "NASDAQ (spot)":    ("^IXIC",     "index"),    # Solo horario NY
+    "— Manual —":       ("",          "forex"),
 }
 
+# Nota: símbolos 🔄 = futuros continuos, cotizan casi 24h
 FUTURES_NOTE = {
-    "ES=F":"S&P 500 E-mini","NQ=F":"Nasdaq 100 E-mini",
-    "YM=F":"Dow Jones E-mini","FDAX=F":"DAX Futures","CL=F":"WTI Crude Oil",
+    "ES=F": "S&P 500 E-mini Futures",
+    "NQ=F": "Nasdaq 100 E-mini Futures",
+    "YM=F": "Dow Jones E-mini Futures",
+    "FDAX=F": "DAX Futures (Eurex)",
+    "CL=F": "Crude Oil WTI Futures",
 }
 
 # ─── SESSION STATE ────────────────────────────────────────────────────────────
-for k in ["df","results","macro_data","ai_analysis"]:
+for k in ["df","results","context","macro_prompt"]:
     if k not in st.session_state:
         st.session_state[k] = None
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 #  QUANTITATIVE ENGINE
-# ══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def calc_order_flow(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
     df = df.copy()
@@ -116,7 +107,7 @@ def calc_order_flow(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
     df["tp_prev"] = df["tp"].shift(1)
     vol = df["Volume"].fillna(0)
     if vol.sum() == 0 or vol.nunique() <= 3:
-        rng     = df["High"] - df["Low"]
+        rng = df["High"] - df["Low"]
         eff_vol = (rng / rng.mean() * df["tp"].mean() * 10000).fillna(1.0)
     else:
         eff_vol = vol.replace(0, np.nan).ffill().fillna(1.0)
@@ -131,36 +122,53 @@ def calc_order_flow(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
     return df
 
 
-def calc_markov(df: pd.DataFrame) -> dict:
+def calc_markov(df: pd.DataFrame, n_states: int = 3) -> dict:
     returns = df["Close"].pct_change().dropna()
     b0, b1  = returns.quantile(0.33), returns.quantile(0.67)
-    def lbl(r): return 0 if r <= b0 else 2 if r > b1 else 1
-    states  = returns.apply(lbl).values
-    T       = np.zeros((3, 3))
-    for i in range(len(states) - 1):
+    labels  = ["BAJISTA", "NEUTRAL", "ALCISTA"]
+
+    def label(r):
+        if r <= b0:  return 0
+        elif r <= b1: return 1
+        else:         return 2
+
+    states = returns.apply(label).values
+    T = np.zeros((3, 3))
+    for i in range(len(states)-1):
         T[states[i], states[i+1]] += 1
-    rs = T.sum(axis=1, keepdims=True); rs[rs == 0] = 1; T /= rs
+    rs = T.sum(axis=1, keepdims=True)
+    rs[rs == 0] = 1
+    T = T / rs
+
     try:
         vals, vecs = np.linalg.eig(T.T)
-        si   = np.argmin(np.abs(vals - 1))
-        stat = np.abs(vecs[:, si].real); stat /= stat.sum()
+        si  = np.argmin(np.abs(vals - 1))
+        stat = np.abs(vecs[:, si].real)
+        stat = stat / stat.sum()
     except Exception:
         stat = np.ones(3) / 3
-    cur  = int(states[-1])
-    dist = np.zeros(3); dist[cur] = 1.0
-    nd   = dist @ np.linalg.matrix_power(T, H4_PER_DAY)
-    n3d  = dist @ np.linalg.matrix_power(T, H4_PER_DAY * 3)
-    return {"transition": T, "labels": ["BAJISTA","NEUTRAL","ALCISTA"],
-            "current": cur, "current_label": ["BAJISTA","NEUTRAL","ALCISTA"][cur],
-            "next_day": nd, "next_3day": n3d, "stationary": stat}
+
+    current = int(states[-1])
+    dist    = np.zeros(3); dist[current] = 1.0
+    next_d  = dist @ np.linalg.matrix_power(T, H4_PER_DAY)
+    next_3d = dist @ np.linalg.matrix_power(T, H4_PER_DAY*3)
+
+    return {
+        "transition": T, "labels": labels,
+        "current_state": current, "current_label": labels[current],
+        "next_day": next_d, "next_3day": next_3d,
+        "stationary": stat, "returns": returns,
+    }
 
 
 def run_mc(price, returns, sims=3000, steps=6, z_adj=0.0, vol_mult=1.0):
     mu    = returns.mean()
     sigma = returns.std() * vol_mult
     drift = mu + z_adj * sigma * 0.15
-    eps   = np.random.default_rng(42).standard_normal((sims, steps))
-    return price * np.exp(((drift - 0.5*sigma**2) + sigma*eps).cumsum(axis=1))
+    rng   = np.random.default_rng(42)
+    eps   = rng.standard_normal((sims, steps))
+    paths = price * np.exp(((drift - 0.5*sigma**2) + sigma*eps).cumsum(axis=1))
+    return paths
 
 
 def calc_volatility(df: pd.DataFrame) -> dict:
@@ -168,710 +176,1098 @@ def calc_volatility(df: pd.DataFrame) -> dict:
     h = df["High"].values.astype(float)
     l = df["Low"].values.astype(float)
     r = np.diff(np.log(c))
-    tr  = np.maximum(h[1:]-l[1:], np.maximum(np.abs(h[1:]-c[:-1]), np.abs(l[1:]-c[:-1])))
-    atr = {w: float(pd.Series(tr).rolling(w).mean().iloc[-1]) for w in [5,14,20,50] if w <= len(tr)}
-    rv_s = pd.Series(r).rolling(14).std() * np.sqrt(TRADING_DAYS * H4_PER_DAY)
-    rv_c = float(rv_s.iloc[-1]) if not np.isnan(rv_s.iloc[-1]) else float(r[-14:].std() * np.sqrt(TRADING_DAYS*H4_PER_DAY))
-    hl   = np.log(h[1:]/l[1:])
-    pk   = float(np.sqrt((hl**2 / (4*np.log(2)))[-14:].mean() * TRADING_DAYS*H4_PER_DAY))
-    gk   = 0.5*hl**2 - (2*np.log(2)-1)*(np.log(c[1:]/c[:-1]))**2
-    gkv  = float(np.sqrt(gk[-14:].mean() * TRADING_DAYS*H4_PER_DAY))
-    rs   = float(pd.Series(r).rolling(5).std().iloc[-1]  * np.sqrt(TRADING_DAYS*H4_PER_DAY))
-    rl   = float(pd.Series(r).rolling(20).std().iloc[-1] * np.sqrt(TRADING_DAYS*H4_PER_DAY)) if len(r)>=20 else rv_c
-    reg, rc = ("EXPANSIÓN", ORANGE) if rs > rl*1.3 else ("COMPRESIÓN", CYAN) if rs < rl*0.7 else ("NORMAL", YELLOW)
-    p    = float(c[-1]); ds = float(r[-14:].std())
-    return {"atr":atr,"rv_current":rv_c,"rv_series":rv_s,"parkinson":pk,"garman_klass":gkv,
-            "rv_short":rs,"rv_long":rl,"vol_regime":reg,"vol_color":rc,
-            "sigma_1d":ds,"price_1s":p*ds*np.sqrt(H4_PER_DAY),"price_2s":p*ds*np.sqrt(H4_PER_DAY)*2,
-            "tr_series":pd.Series(tr)}
 
+    tr  = np.maximum(h[1:]-l[1:],
+          np.maximum(np.abs(h[1:]-c[:-1]), np.abs(l[1:]-c[:-1])))
+    atr = {w: float(pd.Series(tr).rolling(w).mean().iloc[-1])
+           for w in [5, 14, 20, 50] if w <= len(tr)}
+
+    rv_s   = pd.Series(r).rolling(14).std() * np.sqrt(TRADING_DAYS * H4_PER_DAY)
+    rv_cur = float(rv_s.iloc[-1]) if not np.isnan(rv_s.iloc[-1]) else float(r[-14:].std() * np.sqrt(TRADING_DAYS*H4_PER_DAY))
+
+    hl  = np.log(h[1:]/l[1:])
+    pk  = float(np.sqrt((hl**2 / (4*np.log(2)))[-14:].mean() * TRADING_DAYS*H4_PER_DAY))
+    gk  = 0.5*hl**2 - (2*np.log(2)-1)*(np.log(c[1:]/c[:-1]))**2
+    gkv = float(np.sqrt(gk[-14:].mean() * TRADING_DAYS*H4_PER_DAY))
+
+    rs  = float(pd.Series(r).rolling(5).std().iloc[-1]  * np.sqrt(TRADING_DAYS*H4_PER_DAY))
+    rl  = float(pd.Series(r).rolling(20).std().iloc[-1] * np.sqrt(TRADING_DAYS*H4_PER_DAY)) if len(r)>=20 else rv_cur
+
+    if rs > rl*1.3:   reg, rc = "EXPANSIÓN",  ORANGE
+    elif rs < rl*0.7: reg, rc = "COMPRESIÓN", CYAN
+    else:             reg, rc = "NORMAL",      YELLOW
+
+    daily_s  = float(r[-14:].std())
+    p        = float(c[-1])
+    s1d      = p * daily_s * np.sqrt(H4_PER_DAY)
+
+    return {
+        "atr": atr, "rv_current": rv_cur, "rv_series": rv_s,
+        "parkinson": pk, "garman_klass": gkv,
+        "rv_short": rs, "rv_long": rl,
+        "vol_regime": reg, "vol_color": rc,
+        "sigma_1d": daily_s, "price_1s": s1d, "price_2s": s1d*2,
+        "tr_series": pd.Series(tr),
+    }
+
+
+def interpret_zdiff(z, df, macro=0):
+    c = df["Close"].values; h = df["High"].values; l = df["Low"].values
+    n = len(c)
+    lb = min(14,n)
+    rh = h[-lb:].max(); rl_v = l[-lb:].min()
+    rspan = rh - rl_v if rh != rl_v else 1e-10
+    ppct  = (c[-1] - rl_v) / rspan
+    in_top = ppct > 0.75; in_bot = ppct < 0.25
+    ar = c[-3:].mean() if n>=3 else c[-1]
+    ap = c[-6:-3].mean() if n>=6 else c[0]
+    rising = ar > ap
+    ph = h[-6:-1].max() if n>=6 else rh
+    pl = l[-6:-1].min() if n>=6 else rl_v
+    bu = c[-1] > ph; bd = c[-1] < pl
+    az = abs(z)
+
+    if az > 2.2:
+        if z > 0:
+            if in_top and not bu:
+                sig,lbl,col,bull,pat = "DISTRIBUCIÓN EN TECHO","▼ VENTA — distribución en máximos",RED,False,"sobreextension"
+                expl  = f"Z extremo ({z:.2f}) con precio en techo ({ppct*100:.0f}% del rango) sin ruptura. Distribución institucional clásica."
+                entry = f"**Sobreextensión alcista.** Flujo agotado estadísticamente en máximos. **SELL LIMIT** en el nivel actual. No perseguir con Stop."
+            elif bu:
+                sig,lbl,col,bull,pat = "RUPTURA ALCISTA","▲ COMPRA — ruptura institucional",GREEN,True,"ruptura_momentum"
+                expl  = f"Z extremo ({z:.2f}) confirmando ruptura del máximo previo. Flujo real."
+                entry = f"**Ruptura con flujo institucional.** El Z valida la ruptura — no es falsa. **BUY STOP** por encima del máximo roto."
+            elif in_bot:
+                sig,lbl,col,bull,pat = "ACUMULACIÓN OCULTA","▲ COMPRA — acumulación en mínimos",GREEN,True,"acumulacion_oculta"
+                expl  = f"Z extremo ({z:.2f}) con precio en mínimos ({ppct*100:.0f}%). Acumulación silenciosa — Wyckoff Phase B/C."
+                entry = f"**Acumulación oculta en suelos.** Institucionales comprando en zona de valor. **BUY LIMIT** escalonado en la zona baja."
+            else:
+                sig,lbl,col,bull,pat = "AGOTAMIENTO","⚠ Z EXTREMO — zona media",ORANGE,None,"extremo_medio"
+                expl  = f"Z extremo ({z:.2f}) en zona media. Flujo insostenible."
+                entry = f"**Agotamiento en zona media.** Sin contexto claro. Esperar extremo de rango o ruptura confirmada."
+        else:
+            if in_bot and not bd:
+                sig,lbl,col,bull,pat = "CAPITULACIÓN","▲ COMPRA — capitulación en suelos",GREEN,True,"sobreextension"
+                expl  = f"Z extremo negativo ({z:.2f}) en suelos sin ruptura. Capitulación vendedora."
+                entry = f"**Sobreextensión bajista / Capitulación.** Flujo vendedor agotado. **BUY LIMIT** en soporte."
+            elif bd:
+                sig,lbl,col,bull,pat = "RUPTURA BAJISTA","▼ VENTA — ruptura institucional",RED,False,"ruptura_momentum"
+                expl  = f"Z extremo negativo ({z:.2f}) confirmando ruptura del mínimo previo."
+                entry = f"**Ruptura bajista con flujo.** **SELL STOP** bajo el mínimo roto."
+            elif in_top:
+                sig,lbl,col,bull,pat = "DISTRIBUCIÓN OCULTA","▼ VENTA — distribución en máximos",RED,False,"distribucion_oculta"
+                expl  = f"Z extremo negativo ({z:.2f}) con precio en máximos. Distribución silenciosa."
+                entry = f"**Distribución oculta en techo.** Institucionales vendiendo en altos. **SELL LIMIT** en el nivel actual."
+            else:
+                sig,lbl,col,bull,pat = "AGOTAMIENTO BAJISTA","⚠ Z EXTREMO NEGATIVO",ORANGE,None,"extremo_medio"
+                expl  = f"Z extremo negativo ({z:.2f}) zona media. Posible rebote."
+                entry = f"**Agotamiento bajista en zona media.** Esperar confirmación."
+    elif az > 1.5:
+        if z > 0:
+            if bu or (rising and in_top and macro >= 0):
+                sig,lbl,col,bull,pat = "COMPRA MOMENTUM","▲ COMPRA — momentum confirmado",GREEN,True,"ruptura_confirmada"
+                expl  = f"Z {z:.2f} con {'ruptura alcista' if bu else 'precio alto subiendo'}. Flujo y precio alineados."
+                entry = f"**Ruptura/Momentum alcista.** **BUY STOP** en ruptura del rango."
+            elif in_bot and rising:
+                sig,lbl,col,bull,pat = "REBOTE EN SOPORTE","▲ COMPRA — rebote confirmado","#69f0ae",True,"rebote_confirmado"
+                expl  = f"Z {z:.2f} con precio rebotando desde mínimos ({ppct*100:.0f}%)."
+                entry = f"**Rebote en soporte con flujo.** **BUY LIMIT** en retroceso al soporte. Mejor R:R."
+            elif in_top and not rising:
+                sig,lbl,col,bull,pat = "DIVERGENCIA","▼ DIVERGENCIA — flujo no confirma",RED,False,"divergencia"
+                expl  = f"Z alto ({z:.2f}) pero precio cediendo desde máximos. Distribución."
+                entry = f"**Divergencia alcista-precio.** Flujo alto pero precio cae — distribución. **SELL LIMIT**."
+            else:
+                sig,lbl,col,bull,pat = "SESGO ALCISTA","↑ SESGO LARGO","#69f0ae",True,"momentum_moderado"
+                expl  = f"Flujo positivo ({z:.2f}), precio en {ppct*100:.0f}% del rango."
+                entry = f"**Momentum alcista moderado.** **BUY STOP** en ruptura del rango reciente."
+        else:
+            if bd or (not rising and in_bot and macro <= 0):
+                sig,lbl,col,bull,pat = "VENTA MOMENTUM","▼ VENTA — momentum confirmado",RED,False,"ruptura_confirmada"
+                expl  = f"Z {z:.2f} con {'ruptura bajista' if bd else 'precio bajo cayendo'}."
+                entry = f"**Ruptura/Momentum bajista.** **SELL STOP** en ruptura."
+            elif in_top and not rising:
+                sig,lbl,col,bull,pat = "RECHAZO RESISTENCIA","▼ RECHAZO — flujo confirma",RED,False,"rebote_confirmado"
+                expl  = f"Z {z:.2f} negativo con precio rechazando desde máximos ({ppct*100:.0f}%)."
+                entry = f"**Rechazo en resistencia con flujo.** **SELL LIMIT** en rebote al alza."
+            elif in_bot and rising:
+                sig,lbl,col,bull,pat = "DIVERGENCIA ALCISTA","⚡ POSIBLE GIRO",YELLOW,None,"divergencia"
+                expl  = f"Z negativo pero precio subiendo desde mínimos. Posible giro."
+                entry = f"**Divergencia bajista-precio.** Espera confirmación antes de operar."
+            else:
+                sig,lbl,col,bull,pat = "SESGO BAJISTA","↓ SESGO CORTO","#ff6b6b",False,"momentum_moderado"
+                expl  = f"Flujo negativo ({z:.2f}), precio en {ppct*100:.0f}% del rango."
+                entry = f"**Momentum bajista moderado.** **SELL STOP** en ruptura bajista."
+    elif az > 0.5:
+        if z > 0:
+            sig,lbl,col,bull,pat = "SESGO ALCISTA","↑ SESGO LARGO MODERADO","#69f0ae",True,"moderado"
+            expl  = f"Flujo positivo moderado ({z:.2f}). Precio en {ppct*100:.0f}% del rango."
+            entry = f"Flujo positivo moderado. Espera Z > 1.5 o extremo de rango para señal de alta convicción."
+        else:
+            sig,lbl,col,bull,pat = "SESGO BAJISTA","↓ SESGO CORTO MODERADO","#ff6b6b",False,"moderado"
+            expl  = f"Flujo negativo moderado ({z:.2f}). Precio en {ppct*100:.0f}% del rango."
+            entry = f"Flujo negativo moderado. Espera Z < -1.5 o extremo de rango."
+    else:
+        sig,lbl,col,bull,pat = "NEUTRAL","➡ NEUTRAL",YELLOW,None,"neutro"
+        expl  = f"Z-Diff neutral ({z:.2f}). No hay mano fuerte. Precio en {ppct*100:.0f}% del rango."
+        entry = f"Sin señal operativa. No operar — espera que Z supere ±1.5."
+
+    return {
+        "signal":sig,"label":lbl,"color":col,"expl":expl,
+        "entry_reason":entry,"pattern":pat,
+        "bull":bull,"rising":rising,"abs_z":az,"extreme":az>2.2,
+        "price_pct":ppct,"in_top":in_top,"in_bottom":in_bot,
+        "breaking_up":bu,"breaking_down":bd,
+    }
+
+
+def build_macro_prompt(ticker, asset_type, horizon):
+    today = datetime.now().strftime("%A, %d de %B de %Y")
+    return f"""Hoy es {today}. Analiza el contexto macroeconómico para {ticker} ({asset_type}) los próximos {horizon} días.
+
+Responde SOLO con este JSON exacto, sin backticks ni texto extra:
+{{"macro":0,"macro_label":"Neutral","macro_why":"1 frase","news":0,"news_label":"Neutros","news_why":"1 frase con eventos","vol":"normal","vol_label":"Normal","vol_why":"1 frase","risk_events":["evento 1","evento 2","evento 3"],"correlations":{{"USD_INDEX":"neutral","RISK_APPETITE":"neutral","BONDS":"neutral"}},"summary":"2-3 frases sobre sesgo swing {horizon}d de {ticker}"}}
+
+macro y news = entero -2 a 2 · vol = low/normal/high"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  VOLUME ENGINE
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def calc_volume_profile(df: pd.DataFrame, bins: int = 40) -> dict:
-    c=df["Close"].values.astype(float); h=df["High"].values.astype(float)
-    l=df["Low"].values.astype(float);   v=df["Volume"].fillna(0).values.astype(float)
-    if v.sum()==0 or pd.Series(v).nunique()<=3:
-        rng=h-l; tp=(h+l+c)/3; v=(rng/rng.mean()*tp.mean()*1000)
-    mn,mx    = l.min(), h.max()
-    edges    = np.linspace(mn, mx, bins+1)
-    centers  = (edges[:-1]+edges[1:])/2
-    vol_bins = np.zeros(bins)
+    """
+    Perfil de volumen: distribuye el volumen por niveles de precio.
+    Usa volumen real o proxy (rango × tick) para forex.
+    Calcula POC, VAH, VAL (70% del volumen).
+    """
+    c = df["Close"].values.astype(float)
+    h = df["High"].values.astype(float)
+    l = df["Low"].values.astype(float)
+    v = df["Volume"].fillna(0).values.astype(float)
+
+    # Proxy para forex (volumen = 0)
+    vol_ok = v.sum() > 0 and pd.Series(v).nunique() > 3
+    if not vol_ok:
+        rng = h - l
+        tp  = (h + l + c) / 3
+        v   = (rng / rng.mean() * tp.mean() * 1000)
+
+    price_min = l.min()
+    price_max = h.max()
+    edges     = np.linspace(price_min, price_max, bins + 1)
+    centers   = (edges[:-1] + edges[1:]) / 2
+    vol_bins  = np.zeros(bins)
+
+    # Distribuir volumen de cada vela en los bins que toca
     for i in range(len(df)):
-        mask = (centers>=l[i])&(centers<=h[i]); n=mask.sum()
-        if n>0: vol_bins[mask] += v[i]/n
-    poc = float(centers[np.argmax(vol_bins)])
-    tv  = vol_bins.sum(); tgt = tv*0.70
-    si  = np.argsort(vol_bins)[::-1]; cv=0; vai=[]
-    for idx in si:
-        if cv>=tgt: break
-        cv+=vol_bins[idx]; vai.append(idx)
-    return {"centers":centers,"vol_bins":vol_bins,"poc":poc,
-            "vah":float(centers[max(vai)]),"val":float(centers[min(vai)]),
-            "total_vol":tv,"price_min":mn,"price_max":mx}
+        c_lo, c_hi, c_v = l[i], h[i], v[i]
+        mask = (centers >= c_lo) & (centers <= c_hi)
+        n    = mask.sum()
+        if n > 0:
+            vol_bins[mask] += c_v / n
+
+    # POC — precio con mayor volumen
+    poc_idx = int(np.argmax(vol_bins))
+    poc     = float(centers[poc_idx])
+
+    # VAH / VAL — rango del 70% del volumen alrededor del POC
+    total_vol   = vol_bins.sum()
+    target_vol  = total_vol * 0.70
+    sorted_idx  = np.argsort(vol_bins)[::-1]
+    cum_vol     = 0.0
+    va_indices  = []
+    for idx in sorted_idx:
+        if cum_vol >= target_vol:
+            break
+        cum_vol += vol_bins[idx]
+        va_indices.append(idx)
+    vah = float(centers[max(va_indices)])
+    val = float(centers[min(va_indices)])
+
+    return {
+        "centers": centers, "vol_bins": vol_bins,
+        "poc": poc, "vah": vah, "val": val,
+        "total_vol": total_vol, "vol_ok": vol_ok,
+        "price_min": price_min, "price_max": price_max,
+    }
 
 
 def calc_vwap(df: pd.DataFrame) -> pd.Series:
-    tp = (df["High"]+df["Low"]+df["Close"])/3
-    v  = df["Volume"].fillna(0)
-    if v.sum()==0 or v.nunique()<=3:
-        rng=df["High"]-df["Low"]; v=(rng/rng.mean()*tp.mean()*1000).fillna(1.0)
-    return (tp*v).cumsum() / v.cumsum().replace(0, np.nan)
+    """VWAP rolling de la sesión (desde inicio del dataframe)."""
+    tp  = (df["High"] + df["Low"] + df["Close"]) / 3
+    v   = df["Volume"].fillna(0)
+    vol_ok = v.sum() > 0 and v.nunique() > 3
+    if not vol_ok:
+        rng = df["High"] - df["Low"]
+        v   = (rng / rng.mean() * tp.mean() * 1000).fillna(1.0)
+    cum_tpv = (tp * v).cumsum()
+    cum_v   = v.cumsum()
+    return cum_tpv / cum_v.replace(0, np.nan)
 
 
 def calc_volume_delta(df: pd.DataFrame) -> pd.Series:
-    v=df["Volume"].fillna(0).values.astype(float)
-    c=df["Close"].values.astype(float); h=df["High"].values.astype(float); l=df["Low"].values.astype(float)
-    if v.sum()>0 and pd.Series(v).nunique()>3:
-        rng=h-l; rng[rng==0]=1e-10
-        delta=((c-l)/rng - (h-c)/rng)*v
+    """
+    Volume Delta aproximado: volumen alcista - bajista por vela.
+    Sin datos de tick usamos la posición del cierre en el rango como proxy.
+    """
+    v   = df["Volume"].fillna(0).values.astype(float)
+    c   = df["Close"].values.astype(float)
+    h   = df["High"].values.astype(float)
+    l   = df["Low"].values.astype(float)
+    vol_ok = v.sum() > 0 and pd.Series(v).nunique() > 3
+
+    if vol_ok:
+        # Proxy: % del rango que es comprador
+        rng = h - l
+        rng[rng == 0] = 1e-10
+        buy_pct  = (c - l) / rng          # 0=todo vendedor, 1=todo comprador
+        sell_pct = 1 - buy_pct
+        delta    = (buy_pct - sell_pct) * v
     else:
-        d=pd.Series(c).diff().fillna(0).values; delta=d*np.abs(d)*1000
+        # Forex: usa variación de precio como proxy
+        delta = pd.Series(c).diff().fillna(0).values
+        delta = delta * abs(delta) * 1000  # amplificar señal
+
     return pd.Series(delta, index=df.index)
 
 
 def calc_volume_anomalies(df: pd.DataFrame) -> pd.DataFrame:
-    v=df["Volume"].fillna(0).values.astype(float)
-    c=df["Close"].values.astype(float); h=df["High"].values.astype(float); l=df["Low"].values.astype(float)
-    if v.sum()==0 or pd.Series(v).nunique()<=3:
-        rng=h-l; tp=(h+l+c)/3; v=(rng/rng.mean()*tp.mean()*1000)
-    vm = pd.Series(v).rolling(20,min_periods=5).mean().values.copy()
-    vs = pd.Series(v).rolling(20,min_periods=5).std().values.copy()
-    vs = np.where((vs==0)|np.isnan(vs), 1.0, vs)
-    vm = np.where(np.isnan(vm), np.nanmean(v), vm)
-    body = np.abs(c - np.roll(c,1))
-    rng_v = np.where((h-l)==0, 1e-10, h-l)
-    bp = body/rng_v
-    at,sc=[],[]
+    """
+    Detecta anomalías de volumen:
+    - Volumen > 2σ sobre la media = spike
+    - Volumen alto + vela pequeña = absorción (institucional)
+    - Volumen bajo + vela grande = ruptura sin volumen (sospechosa)
+    """
+    v     = df["Volume"].fillna(0).values.astype(float)
+    c     = df["Close"].values.astype(float)
+    h     = df["High"].values.astype(float)
+    l     = df["Low"].values.astype(float)
+    vol_ok = v.sum() > 0 and pd.Series(v).nunique() > 3
+
+    if not vol_ok:
+        rng = h - l
+        tp  = (h + l + c) / 3
+        v   = (rng / rng.mean() * tp.mean() * 1000)
+
+    v_mean = pd.Series(v).rolling(20, min_periods=5).mean().values.copy()
+    v_std  = pd.Series(v).rolling(20, min_periods=5).std().values.copy()
+    # Replace 0 and NaN in std to avoid division errors
+    v_std  = np.where((v_std == 0) | np.isnan(v_std), 1.0, v_std)
+    v_mean = np.where(np.isnan(v_mean), np.nanmean(v) if len(v) > 0 else 1.0, v_mean)
+
+    body   = np.abs(c - np.roll(c, 1))
+    rng_v  = h - l
+    rng_v  = np.where(rng_v == 0, 1e-10, rng_v)
+    body_pct = body / rng_v  # % del rango que es cuerpo
+
+    anomaly_type  = []
+    anomaly_score = []
+
     for i in range(len(df)):
-        z=(v[i]-vm[i])/vs[i]
-        if z>2.5 and bp[i]<0.3:    at.append("ABSORCIÓN");    sc.append(min(abs(z),5))
-        elif z>2.5:                  at.append("SPIKE VOL");    sc.append(min(abs(z),5))
-        elif z>1.8 and bp[i]>0.7:   at.append("MOMENTUM");     sc.append(min(abs(z),4))
-        elif z<-1.5 and bp[i]>0.6:  at.append("RUPTURA SECA"); sc.append(min(abs(z),3))
-        else:                        at.append("NORMAL");        sc.append(0)
-    df2=df.copy(); df2["vol_z"]=(v-vm)/vs; df2["anomaly"]=at; df2["anom_score"]=sc; df2["vol_eff"]=v
-    return df2
+        z = (v[i] - v_mean[i]) / v_std[i]
+        bp = body_pct[i]
 
-
-def interpret_zdiff(z, df, macro=0) -> dict:
-    c=df["Close"].values; h=df["High"].values; l=df["Low"].values; n=len(c)
-    lb=min(14,n); rh=h[-lb:].max(); rl_v=l[-lb:].min()
-    rspan=rh-rl_v if rh!=rl_v else 1e-10
-    ppct=(c[-1]-rl_v)/rspan
-    in_top=ppct>0.75; in_bot=ppct<0.25
-    rising=c[-3:].mean()>c[-6:-3].mean() if n>=6 else True
-    ph=h[-6:-1].max() if n>=6 else rh; pl=l[-6:-1].min() if n>=6 else rl_v
-    bu=c[-1]>ph; bd=c[-1]<pl; az=abs(z)
-    # Simplified contextual interpretation
-    if az>2.2:
-        if z>0:
-            if in_top and not bu: sig,col,bull="DISTRIBUCIÓN EN TECHO",RED,False
-            elif bu:               sig,col,bull="RUPTURA ALCISTA",GREEN,True
-            elif in_bot:           sig,col,bull="ACUMULACIÓN OCULTA",GREEN,True
-            else:                  sig,col,bull="AGOTAMIENTO",ORANGE,None
+        if z > 2.5 and bp < 0.3:
+            at = "ABSORCIÓN"    # Volumen muy alto, vela pequeña → institucional absorbiendo
+            sc = min(abs(z), 5)
+        elif z > 2.5:
+            at = "SPIKE VOLUMEN" # Volumen muy alto con movimiento fuerte
+            sc = min(abs(z), 5)
+        elif z > 1.8 and bp > 0.7:
+            at = "MOMENTUM"     # Volumen alto + cuerpo grande → impulso real
+            sc = min(abs(z), 4)
+        elif z < -1.5 and bp > 0.6:
+            at = "RUPTURA SECA" # Volumen bajo + cuerpo grande → ruptura sospechosa
+            sc = min(abs(z), 3)
         else:
-            if in_bot and not bd: sig,col,bull="CAPITULACIÓN",GREEN,True
-            elif bd:               sig,col,bull="RUPTURA BAJISTA",RED,False
-            elif in_top:           sig,col,bull="DISTRIBUCIÓN OCULTA",RED,False
-            else:                  sig,col,bull="AGOTAMIENTO BAJISTA",ORANGE,None
-    elif az>1.5:
-        if z>0:
-            if bu or (rising and in_top): sig,col,bull="COMPRA MOMENTUM",GREEN,True
-            elif in_bot and rising:        sig,col,bull="REBOTE EN SOPORTE","#69f0ae",True
-            elif in_top and not rising:    sig,col,bull="DIVERGENCIA BAJISTA",RED,False
-            else:                          sig,col,bull="SESGO ALCISTA","#69f0ae",True
-        else:
-            if bd or (not rising and in_bot): sig,col,bull="VENTA MOMENTUM",RED,False
-            elif in_top and not rising:        sig,col,bull="RECHAZO RESISTENCIA",RED,False
-            elif in_bot and rising:            sig,col,bull="DIVERGENCIA ALCISTA",YELLOW,None
-            else:                              sig,col,bull="SESGO BAJISTA","#ff6b6b",False
-    elif az>0.5:
-        sig,col,bull=("SESGO ALCISTA","#69f0ae",True) if z>0 else ("SESGO BAJISTA","#ff6b6b",False)
-    else:
-        sig,col,bull="NEUTRAL",YELLOW,None
-    return {"signal":sig,"color":col,"bull":bull,"rising":rising,"abs_z":az,
-            "extreme":az>2.2,"price_pct":ppct,"in_top":in_top,"in_bottom":in_bot,
-            "breaking_up":bu,"breaking_down":bd}
+            at = "NORMAL"
+            sc = 0
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  MACRO ENGINE — FRED (gratis, sin key)
-# ══════════════════════════════════════════════════════════════════════════════
+        anomaly_type.append(at)
+        anomaly_score.append(sc)
 
-@st.cache_data(ttl=3600)  # cache 1h
-def fetch_fred(series_id: str, periods: int = 120) -> pd.Series:
-    """Descarga una serie de FRED sin API key."""
-    try:
-        url  = f"{FRED_BASE}{series_id}"
-        df   = pd.read_csv(url, index_col=0, parse_dates=True)
-        df.columns = [series_id]
-        df   = df[df[series_id] != "."]
-        df[series_id] = pd.to_numeric(df[series_id], errors="coerce").dropna()
-        return df[series_id].dropna().tail(periods)
-    except Exception:
-        return pd.Series(dtype=float)
+    df_out = df.copy()
+    df_out["vol_z"]     = (v - v_mean) / v_std
+    df_out["anomaly"]   = anomaly_type
+    df_out["anom_score"]= anomaly_score
+    df_out["volume_eff"]= v
+    return df_out
 
 
-@st.cache_data(ttl=3600)
-def load_macro_data() -> dict:
-    """Carga todos los datos macro necesarios desde FRED."""
-    data = {}
-    series = {
-        # Tipos de interés
-        "FEDFUNDS":  "Fed Funds Rate",
-        "DFF":       "Fed Funds Efectivo (diario)",
-        # Inflación
-        "PCEPILFE":  "PCE Core (Fed target)",
-        "CPIAUCSL":  "CPI (IPC EEUU)",
-        "T10YIE":    "Breakeven Inflación 10Y",
-        # Tipos reales
-        "DFII10":    "Tipo Real 10Y (TIPS)",
-        "DFII5":     "Tipo Real 5Y (TIPS)",
-        "DFII2":     "Tipo Real 2Y (TIPS)",
-        # Curva de tipos
-        "DGS2":      "Treasury 2Y",
-        "DGS5":      "Treasury 5Y",
-        "DGS10":     "Treasury 10Y",
-        "DGS30":     "Treasury 30Y",
-        "T10Y2Y":    "Spread 10Y-2Y",
-        "T10Y3M":    "Spread 10Y-3M",
-        # Condiciones financieras
-        "NFCI":      "Chicago Fed Financial Conditions",
-        "VIXCLS":    "VIX",
-        # Empleo / Macro
-        "UNRATE":    "Desempleo EEUU",
-        "PAYEMS":    "Nóminas no agrícolas",
-    }
-    for sid, name in series.items():
-        s = fetch_fred(sid)
-        if not s.empty:
-            data[sid] = {"series": s, "name": name, "latest": float(s.iloc[-1])}
-    return data
+# ═══════════════════════════════════════════════════════════════════════════════
+#  SUMMARY ENGINE — Puntuación agregada multi-modelo
+# ═══════════════════════════════════════════════════════════════════════════════
 
-
-def calc_real_rates(macro: dict) -> dict:
+def build_summary(r: dict, ctx: dict) -> dict:
     """
-    Tipos reales = Tipos nominales - Inflación esperada (breakeven).
-    También calcula expectativas de tipos implícitas en la curva.
+    Agrega todas las señales en una puntuación direccional unificada.
+    Retorna score -100 a +100, señales individuales, zonas clave de volumen,
+    y un veredicto operativo con nivel de convicción.
     """
-    out = {}
-    # Tipos reales directos (TIPS)
-    for sid in ["DFII10","DFII5","DFII2"]:
-        if sid in macro:
-            out[sid] = macro[sid]["latest"]
-    # Tipo real aproximado = Fed Funds - PCE Core
-    if "FEDFUNDS" in macro and "PCEPILFE" in macro:
-        ff  = macro["FEDFUNDS"]["latest"]
-        pce = macro["PCEPILFE"]["latest"]
-        out["real_rate_approx"] = ff - pce
-        out["fed_funds"]        = ff
-        out["pce_core"]         = pce
-    # Breakeven inflacion
-    if "T10YIE" in macro:
-        out["breakeven_10y"] = macro["T10YIE"]["latest"]
-    # Spread curva
-    if "T10Y2Y" in macro:
-        out["spread_10y2y"] = macro["T10Y2Y"]["latest"]
-        out["inverted"]     = out["spread_10y2y"] < 0
-    return out
-
-
-def build_summary_score(r: dict) -> dict:
-    """Puntuación multi-modelo -100 a +100."""
     price    = r["price"]
     zctx     = r["zdiff_ctx"]
     vdata    = r["vol_data"]
     mk       = r["markov"]
     vp       = r["vol_profile"]
-    vwap_now = float(r["vwap_series"].iloc[-1])
+    vwap     = r["vwap_series"]
     delt     = r["delta_series"]
     adj_bull = r["adj_bull"]
+    macro    = ctx.get("macro", 0) if ctx else 0
+    news     = ctx.get("news",  0) if ctx else 0
 
     signals = []
 
-    # 1. Monte Carlo (peso 25)
-    mc_s = (adj_bull - 50) * 0.5
-    mc_l = "Alcista" if adj_bull>=60 else "Bajista" if adj_bull<=40 else "Neutral"
-    mc_c = GREEN if adj_bull>=60 else RED if adj_bull<=40 else YELLOW
-    signals.append({"cat":"Monte Carlo","ico":"🎲","val":f"P={adj_bull:.1f}%",
-                    "lbl":mc_l,"col":mc_c,"score":mc_s,"peso":25})
+    # ── 1. DIRECCIONALIDAD — Monte Carlo (peso 25) ────────────────────────────
+    mc_score = (adj_bull - 50) * 0.5          # -25 a +25
+    mc_label = ("Alcista" if adj_bull >= 60
+                else "Bajista" if adj_bull <= 40 else "Neutral")
+    mc_color = GREEN if adj_bull >= 60 else RED if adj_bull <= 40 else YELLOW
+    signals.append({
+        "categoria": "Monte Carlo",
+        "icono": "🎲",
+        "valor": f"P={adj_bull:.1f}%",
+        "label": mc_label,
+        "color": mc_color,
+        "score": mc_score,
+        "peso":  25,
+        "detalle": f"Monte Carlo GBM proyecta {adj_bull:.1f}% de probabilidad alcista en el horizonte."
+    })
 
-    # 2. Z-Diff (peso 25)
-    z    = r["last_z"]; zb = zctx.get("bull")
-    z_s  = (min(abs(z),2.5)/2.5*25) * (1 if zb is True else -1 if zb is False else 0)
-    signals.append({"cat":"Z-Diff Order Flow","ico":"⚡","val":f"{z:.3f}",
-                    "lbl":zctx.get("signal","Neutral"),"col":zctx.get("color",YELLOW),
-                    "score":z_s,"peso":25})
+    # ── 2. ORDER FLOW Z-DIFF (peso 25) ───────────────────────────────────────
+    z = r["last_z"]
+    z_bull = zctx.get("bull")
+    if z_bull is True:     z_score = min(abs(z), 2.5) / 2.5 * 25
+    elif z_bull is False:  z_score = -min(abs(z), 2.5) / 2.5 * 25
+    else:                   z_score = 0
+    z_label = zctx.get("signal", "Neutral")
+    z_color = zctx.get("color", YELLOW)
+    signals.append({
+        "categoria": "Z-Diff Order Flow",
+        "icono": "⚡",
+        "valor": f"{z:.3f}",
+        "label": z_label,
+        "color": z_color,
+        "score": z_score,
+        "peso":  25,
+        "detalle": zctx.get("expl", "—")
+    })
 
-    # 3. Markov (peso 15)
-    nd   = mk["next_day"]
-    mk_s = (float(nd[2]) - float(nd[0])) * 15
-    mk_l = mk["labels"][int(np.argmax(nd))]
-    mk_c = GREEN if nd[2]>nd[0] else RED if nd[0]>nd[2] else YELLOW
-    signals.append({"cat":"Cadena de Markov","ico":"🔗",
-                    "val":f"↑{nd[2]*100:.0f}% ↓{nd[0]*100:.0f}%",
-                    "lbl":f"→ {mk_l}","col":mk_c,"score":mk_s,"peso":15})
+    # ── 3. MARKOV (peso 15) ───────────────────────────────────────────────────
+    nd  = mk["next_day"]
+    mk_bull = float(nd[2])    # P(ALCISTA)
+    mk_bear = float(nd[0])    # P(BAJISTA)
+    mk_score = (mk_bull - mk_bear) * 15
+    mk_dom   = mk["labels"][int(np.argmax(nd))]
+    mk_color = GREEN if mk_bull > mk_bear else RED if mk_bear > mk_bull else YELLOW
+    signals.append({
+        "categoria": "Cadena de Markov",
+        "icono": "🔗",
+        "valor": f"↑{mk_bull*100:.0f}% ↓{mk_bear*100:.0f}%",
+        "label": f"→ {mk_dom} mañana",
+        "color": mk_color,
+        "score": mk_score,
+        "peso":  15,
+        "detalle": f"Probabilidad de transición: {mk_dom} con {max(nd)*100:.0f}% de probabilidad."
+    })
 
-    # 4. Volumen zonas (peso 20)
-    poc,vah,val_v = vp["poc"],vp["vah"],vp["val"]
-    cd   = float(delt.sum()); rd = float(delt.iloc[-6:].sum())
-    in_va= val_v<=price<=vah; ab_va=price>vah; bl_va=price<val_v
-    ab_vw= price>vwap_now; db = cd>0 and rd>0
-    if ab_va and ab_vw and db:    vs,vl,vc=20,"Alcista — sobre VA+VWAP",GREEN
-    elif ab_va and not db:         vs,vl,vc=8,"Alcista débil — delta mixto","#69f0ae"
-    elif bl_va and not ab_vw and not db: vs,vl,vc=-20,"Bajista — bajo VA+VWAP",RED
-    elif bl_va and db:             vs,vl,vc=-8,"Bajista débil — delta mixto","#ff6b6b"
-    elif in_va and price>poc:      vs,vl,vc=8,"Neutro-alcista — sobre POC","#69f0ae"
-    elif in_va:                    vs,vl,vc=-8,"Neutro-bajista — bajo POC","#ff6b6b"
-    else:                          vs,vl,vc=0,"Neutral",YELLOW
-    signals.append({"cat":"Volumen & Zonas","ico":"📦",
-                    "val":f"POC {poc:.4g}","lbl":vl,"col":vc,"score":vs,"peso":20})
+    # ── 4. VOLATILIDAD — Régimen (peso 10) ───────────────────────────────────
+    reg = vdata["vol_regime"]
+    if reg == "COMPRESIÓN":
+        # Compresión: señal de movimiento próximo, dirección incierta
+        vol_score = 0   # no añade dirección
+        vol_label = "Compresión — Ruptura Próxima"
+        vol_color = CYAN
+        vol_det   = f"Volatilidad corta ({vdata['rv_short']*100:.1f}%) muy inferior a la larga ({vdata['rv_long']*100:.1f}%). Movimiento inminente — tamaño reducido."
+    elif reg == "EXPANSIÓN":
+        # En expansión el momentum ya tiene dirección capturada por Z-Diff
+        vol_score = 0
+        vol_label = "Expansión — Aumenta SL/TP"
+        vol_color = ORANGE
+        vol_det   = f"Volatilidad en expansión. Aumenta stops y reduce tamaño."
+    else:
+        vol_score = 0
+        vol_label = "Normal — Parámetros estándar"
+        vol_color = YELLOW
+        vol_det   = "Régimen estable. Usa ATR como referencia directa."
+    signals.append({
+        "categoria": "Régimen Volatilidad",
+        "icono": "📊",
+        "valor": f"{vdata['rv_current']*100:.1f}%",
+        "label": vol_label,
+        "color": vol_color,
+        "score": vol_score,
+        "peso":  10,
+        "detalle": vol_det
+    })
 
-    # 5. Volatilidad régimen (peso 5)
-    reg  = vdata["vol_regime"]
-    v_s  = 0; v_l = reg; v_c = vdata["vol_color"]
-    signals.append({"cat":"Régimen Volatilidad","ico":"📊",
-                    "val":f"{vdata['rv_current']*100:.1f}%","lbl":v_l,"col":v_c,
-                    "score":v_s,"peso":5})
+    # ── 5. VOLUMEN — Posición respecto a zonas clave (peso 15) ───────────────
+    poc, vah, val_v = vp["poc"], vp["vah"], vp["val"]
+    vwap_now = float(vwap.iloc[-1])
+    cum_delta = float(delt.sum())
+    recent_delta = float(delt.iloc[-6:].sum())
 
-    # 6. Macro FRED (peso 15) — sólo si disponible
-    mac  = st.session_state.get("macro_data") or {}
-    rr   = calc_real_rates(mac) if mac else {}
-    m_s  = 0
-    if rr:
-        rra = rr.get("real_rate_approx", rr.get("DFII10", 0))
-        sp  = rr.get("spread_10y2y", 0)
-        if rra > 1.5:   m_s -= 8   # tipos reales altos = restrictivo
-        elif rra < 0:   m_s += 8   # tipos reales negativos = expansivo
-        if sp < -0.5:   m_s -= 5   # curva muy invertida = recesión
-        elif sp > 0.5:  m_s += 3
-    m_l  = "Restrictivo" if m_s<0 else "Expansivo" if m_s>0 else "Neutral"
-    m_c  = RED if m_s<0 else GREEN if m_s>0 else YELLOW
-    signals.append({"cat":"Macro FRED","ico":"🌐",
-                    "val":f"RR={rr.get('real_rate_approx',0):+.1f}%" if rr else "Sin datos",
-                    "lbl":m_l,"col":m_c,"score":m_s,"peso":15})
+    # Posición precio vs zonas
+    in_va     = val_v <= price <= vah
+    above_va  = price > vah
+    below_va  = price < val_v
+    above_poc = price > poc
+    above_vwap= price > vwap_now
+    delta_bull= cum_delta > 0 and recent_delta > 0
 
-    total   = float(np.clip(sum(s["score"] for s in signals), -100, 100))
-    bulls   = sum(1 for s in signals if s["score"]>2)
-    bears   = sum(1 for s in signals if s["score"]<-2)
-    neuts   = len(signals)-bulls-bears
-    align   = max(bulls,bears)/len(signals)
+    if above_va and above_vwap and delta_bull:
+        vol_dir_score = 15; vol_dir_lbl = "Alcista — precio sobre VA+VWAP"
+        vol_dir_col   = GREEN
+        vol_dir_det   = f"Precio {price:.4f} sobre VAH {vah:.4f} y VWAP {vwap_now:.4f} con delta comprador. Estructura de volumen alcista."
+    elif above_va and not delta_bull:
+        vol_dir_score = 5;  vol_dir_lbl = "Alcista débil — VA pero delta mixto"
+        vol_dir_col   = "#69f0ae"
+        vol_dir_det   = f"Precio sobre VAH pero delta vendedor reciente. Posible distribución en techo."
+    elif below_va and not above_vwap and not delta_bull:
+        vol_dir_score = -15; vol_dir_lbl = "Bajista — precio bajo VA+VWAP"
+        vol_dir_col   = RED
+        vol_dir_det   = f"Precio {price:.4f} bajo VAL {val_v:.4f} y VWAP {vwap_now:.4f} con delta vendedor. Estructura bajista."
+    elif below_va and delta_bull:
+        vol_dir_score = -5; vol_dir_lbl = "Bajista débil — bajo VA pero delta mixto"
+        vol_dir_col   = "#ff6b6b"
+        vol_dir_det   = f"Precio bajo VAL pero delta comprador reciente. Posible acumulación en suelo."
+    elif in_va and above_poc:
+        vol_dir_score = 8;  vol_dir_lbl = "Neutro-alcista — en VA sobre POC"
+        vol_dir_col   = "#69f0ae"
+        vol_dir_det   = f"Precio en Value Area por encima del POC ({poc:.4f}). Zona de equilibrio con ligero sesgo alcista."
+    elif in_va and not above_poc:
+        vol_dir_score = -8; vol_dir_lbl = "Neutro-bajista — en VA bajo POC"
+        vol_dir_col   = "#ff6b6b"
+        vol_dir_det   = f"Precio en Value Area por debajo del POC ({poc:.4f}). Zona de equilibrio con ligero sesgo bajista."
+    else:
+        vol_dir_score = 0; vol_dir_lbl = "Neutral"
+        vol_dir_col   = YELLOW
+        vol_dir_det   = "Sin señal de volumen clara."
 
-    if abs(total)>=55 and align>=0.75:   conv,conv_c="ALTA",GREEN if total>0 else RED
-    elif abs(total)>=35 and align>=0.5:  conv,conv_c="MEDIA",ORANGE
-    else:                                 conv,conv_c="BAJA",MUTED
+    signals.append({
+        "categoria": "Volumen & Zonas Clave",
+        "icono": "📦",
+        "valor": f"POC {poc:.4f}",
+        "label": vol_dir_lbl,
+        "color": vol_dir_col,
+        "score": vol_dir_score,
+        "peso":  15,
+        "detalle": vol_dir_det
+    })
 
-    if total>=40 and conv in("ALTA","MEDIA"):   verd,vc_="SESGO ALCISTA ▲",GREEN
-    elif total<=-40 and conv in("ALTA","MEDIA"):verd,vc_="SESGO BAJISTA ▼",RED
-    elif abs(total)>=25:                         verd,vc_="MONITORIZAR ◉",ORANGE
-    else:                                         verd,vc_="SIN SEÑAL CLARA —",MUTED
+    # ── 6. MACRO (peso 10) ────────────────────────────────────────────────────
+    macro_score = (macro + news) / 4 * 10   # -10 a +10
+    macro_label = ctx.get("macro_label", "Sin contexto") if ctx else "Sin contexto macro"
+    macro_color = GREEN if macro_score > 2 else RED if macro_score < -2 else YELLOW
+    signals.append({
+        "categoria": "Macro + Noticias",
+        "icono": "🌐",
+        "valor": f"M:{macro:+d} N:{news:+d}",
+        "label": macro_label,
+        "color": macro_color,
+        "score": macro_score,
+        "peso":  10,
+        "detalle": ctx.get("summary", "Sin contexto macro. Añade contexto en Tab ④.") if ctx else "Sin contexto macro. Añade contexto en Tab ④."
+    })
 
-    return {"signals":signals,"total":total,"verdict":verd,"verdict_color":vc_,
-            "conviction":conv,"conviction_color":conv_c,
-            "bulls":bulls,"bears":bears,"neuts":neuts,"align":align,
-            "poc":poc,"vah":vah,"val":val_v,"vwap":vwap_now,"real_rates":rr}
+    # ── SCORE TOTAL ───────────────────────────────────────────────────────────
+    total_score = sum(s["score"] for s in signals)
+    total_score = float(np.clip(total_score, -100, 100))
 
-# ══════════════════════════════════════════════════════════════════════════════
+    # Alineación de señales (cuántas apuntan en la misma dirección)
+    bullish_sigs = sum(1 for s in signals if s["score"] > 2)
+    bearish_sigs = sum(1 for s in signals if s["score"] < -2)
+    neutral_sigs = len(signals) - bullish_sigs - bearish_sigs
+    alignment    = max(bullish_sigs, bearish_sigs) / len(signals)
+
+    # Convicción
+    if abs(total_score) >= 55 and alignment >= 0.75:
+        conviction = "ALTA"; conviction_color = GREEN if total_score > 0 else RED
+    elif abs(total_score) >= 35 and alignment >= 0.5:
+        conviction = "MEDIA"; conviction_color = ORANGE
+    else:
+        conviction = "BAJA"; conviction_color = MUTED
+
+    # Veredicto operativo
+    if total_score >= 40 and conviction in ("ALTA","MEDIA"):
+        verdict       = "OPERAR — LARGO"
+        verdict_color = GREEN
+        verdict_icon  = "▲"
+    elif total_score <= -40 and conviction in ("ALTA","MEDIA"):
+        verdict       = "OPERAR — CORTO"
+        verdict_color = RED
+        verdict_icon  = "▼"
+    elif abs(total_score) >= 25:
+        verdict       = "MONITORIZAR"
+        verdict_color = ORANGE
+        verdict_icon  = "◉"
+    else:
+        verdict       = "NO OPERAR"
+        verdict_color = MUTED
+        verdict_icon  = "—"
+
+    # Zonas clave de volumen
+    key_zones = []
+    key_zones.append({"nivel": poc,     "tipo": "POC",  "color": ORANGE,
+                       "desc": "Mayor volumen negociado — imán de precio"})
+    key_zones.append({"nivel": vah,     "tipo": "VAH",  "color": BLUE,
+                       "desc": "Techo del 70% del volumen — resistencia clave"})
+    key_zones.append({"nivel": val_v,   "tipo": "VAL",  "color": BLUE,
+                       "desc": "Suelo del 70% del volumen — soporte clave"})
+    key_zones.append({"nivel": vwap_now,"tipo": "VWAP", "color": YELLOW,
+                       "desc": "Precio medio ponderado por volumen — soporte/resistencia dinámica"})
+    key_zones.sort(key=lambda x: x["nivel"], reverse=True)
+
+    return {
+        "signals":       signals,
+        "total_score":   total_score,
+        "verdict":       verdict,
+        "verdict_color": verdict_color,
+        "verdict_icon":  verdict_icon,
+        "conviction":    conviction,
+        "conviction_color": conviction_color,
+        "bullish_sigs":  bullish_sigs,
+        "bearish_sigs":  bearish_sigs,
+        "neutral_sigs":  neutral_sigs,
+        "alignment":     alignment,
+        "key_zones":     key_zones,
+        "vol_regime":    reg,
+        "poc": poc, "vah": vah, "val": val_v, "vwap": vwap_now,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  CHARTS
-# ══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 
-def chart_price_mc(df, mc_paths):
-    price   = float(df["Close"].iloc[-1])
-    last_ts = df.index[-1]; h4d = timedelta(hours=4)
-    steps   = mc_paths.shape[1]
-    fts     = [last_ts + h4d*(i+1) for i in range(steps)]
-    p5,p25,p50,p75,p95 = [np.percentile(mc_paths,p,axis=0) for p in [5,25,50,75,95]]
-    final   = mc_paths[:,-1]
-    bull_pct= float(np.mean(final>price)*100)
+def fig_price_with_mc(df, mc_paths):
+    price    = float(df["Close"].iloc[-1])
+    last_ts  = df.index[-1]
+    h4d      = timedelta(hours=4)
+    steps    = mc_paths.shape[1]
+    fts      = [last_ts + h4d*(i+1) for i in range(steps)]
 
-    fig = make_subplots(rows=2, cols=2,
-        column_widths=[0.78,0.22], row_heights=[0.70,0.30],
+    p5  = np.percentile(mc_paths,  5, axis=0)
+    p25 = np.percentile(mc_paths, 25, axis=0)
+    p50 = np.percentile(mc_paths, 50, axis=0)
+    p75 = np.percentile(mc_paths, 75, axis=0)
+    p95 = np.percentile(mc_paths, 95, axis=0)
+    final    = mc_paths[:, -1]
+    bull_pct = float(np.mean(final > price) * 100)
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        column_widths=[0.78, 0.22],
+        row_heights=[0.70, 0.30],
         shared_xaxes=False, shared_yaxes=False,
         horizontal_spacing=0.01, vertical_spacing=0.06,
-        specs=[[{"type":"xy"},{"type":"bar","rowspan":2}],[{"type":"bar"},None]])
+        specs=[[{"type":"xy"}, {"type":"bar","rowspan":2}],[{"type":"bar"}, None]],
+    )
 
+    # Candlestick
     fig.add_trace(go.Candlestick(
-        x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+        x=df.index, open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"],
         increasing_fillcolor=GREEN, increasing_line_color=GREEN,
         decreasing_fillcolor=RED,   decreasing_line_color=RED,
-        name="H4", showlegend=False), row=1, col=1)
+        name="H4", showlegend=False
+    ), row=1, col=1)
 
-    for (ya,yb),fc in [((p95,p5),"rgba(0,144,255,0.06)"),((p75,p25),"rgba(0,144,255,0.15)")]:
-        fig.add_trace(go.Scatter(x=fts+fts[::-1],y=list(ya)+list(yb[::-1]),
-            fill="toself",fillcolor=fc,line=dict(color="rgba(0,0,0,0)"),showlegend=False),row=1,col=1)
-    fig.add_trace(go.Scatter(x=fts,y=p50,line=dict(color=CYAN,width=2,dash="dash"),name="Mediana MC"),row=1,col=1)
+    # MC bands
+    fig.add_trace(go.Scatter(
+        x=fts+fts[::-1], y=list(p95)+list(p5[::-1]),
+        fill="toself", fillcolor="rgba(0,144,255,0.07)",
+        line=dict(color="rgba(0,0,0,0)"), name="IC 90%"
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=fts+fts[::-1], y=list(p75)+list(p25[::-1]),
+        fill="toself", fillcolor="rgba(0,144,255,0.17)",
+        line=dict(color="rgba(0,0,0,0)"), name="IC 50%"
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=fts, y=p50, line=dict(color=CYAN, width=2, dash="dash"),
+        name="Mediana MC"
+    ), row=1, col=1)
 
-    rng2 = np.random.default_rng(7)
-    for i in rng2.choice(len(mc_paths), size=min(40,len(mc_paths)), replace=False):
-        c2 = "rgba(0,230,118,0.03)" if mc_paths[i,-1]>price else "rgba(255,23,68,0.03)"
-        fig.add_trace(go.Scatter(x=fts,y=mc_paths[i],line=dict(color=c2,width=1),
-            showlegend=False,hoverinfo="skip"),row=1,col=1)
-    fig.add_hline(y=price,line_color="rgba(255,255,255,0.3)",line_dash="dot",row=1,col=1)
+    # Sample paths
+    rng = np.random.default_rng(7)
+    for i in rng.choice(len(mc_paths), size=min(50,len(mc_paths)), replace=False):
+        c = "rgba(0,230,118,0.04)" if mc_paths[i,-1]>price else "rgba(255,23,68,0.04)"
+        fig.add_trace(go.Scatter(
+            x=fts, y=mc_paths[i],
+            line=dict(color=c, width=1), showlegend=False, hoverinfo="skip"
+        ), row=1, col=1)
 
-    zc_colors = df["z_diff"].apply(lambda z: GREEN if z>1.5 else "#69f0ae" if z>0.5
-        else YELLOW if z>-0.5 else "#ff6b6b" if z>-1.5 else RED)
-    fig.add_trace(go.Bar(x=df.index,y=df["z_diff"],marker_color=zc_colors,showlegend=False),row=2,col=1)
-    for yv,clr in [(1.5,"rgba(0,230,118,.3)"),(-1.5,"rgba(255,23,68,.3)"),(0,"rgba(255,255,255,.1)")]:
-        fig.add_hline(y=yv,line_color=clr,line_dash="dash",row=2,col=1)
+    # Current price line
+    fig.add_hline(y=price, line_color="rgba(255,255,255,0.35)",
+                   line_dash="dot", line_width=1, row=1, col=1)
 
-    mn,mx    = final.min(), final.max()
-    edges    = np.linspace(mn,mx,55)
-    counts,_ = np.histogram(final,bins=edges)
+    # Z-Diff bars
+    zc = df["z_diff"].apply(
+        lambda z: GREEN if z>1.5 else "#69f0ae" if z>0.5
+        else YELLOW if z>-0.5 else "#ff6b6b" if z>-1.5 else RED
+    )
+    fig.add_trace(go.Bar(x=df.index, y=df["z_diff"],
+                          marker_color=zc, showlegend=False), row=2, col=1)
+    for yv, clr in [(1.5,"rgba(0,230,118,.3)"),(-1.5,"rgba(255,23,68,.3)"),(0,"rgba(255,255,255,.1)")]:
+        fig.add_hline(y=yv, line_color=clr, line_dash="dash", row=2, col=1)
+
+    # Histogram (horizontal, col 2)
+    bins   = 55
+    mn, mx = final.min(), final.max()
+    edges  = np.linspace(mn, mx, bins+1)
+    counts,_ = np.histogram(final, bins=edges)
     centers  = (edges[:-1]+edges[1:])/2
-    fig.add_trace(go.Bar(x=counts,y=centers,orientation="h",
-        marker_color=[GREEN if c>price else RED for c in centers],
-        marker_line_width=0,opacity=0.85,showlegend=False),row=1,col=2)
-    fig.add_hline(y=price,line_color="rgba(255,255,255,0.7)",line_dash="dot",row=1,col=2)
-    fig.add_annotation(xref="x3 domain",yref="y3 domain",x=0.5,y=1.0,yanchor="top",
-        text=f"▲ {bull_pct:.1f}%",showarrow=False,
-        font=dict(size=18,color=GREEN if bull_pct>=50 else RED,family="Rajdhani"))
+    hcols    = [GREEN if c>price else RED for c in centers]
 
-    fig.update_layout(template="plotly_dark",paper_bgcolor=BG,plot_bgcolor=S1,
-        height=600,margin=dict(l=8,r=8,t=8,b=8),xaxis_rangeslider_visible=False,
-        legend=dict(orientation="h",y=1.02,x=0,font=dict(size=10),bgcolor="rgba(0,0,0,0)"))
-    fig.update_xaxes(gridcolor=BORDER); fig.update_yaxes(gridcolor=BORDER)
-    fig.update_yaxes(title_text="Precio H4",row=1,col=1)
-    fig.update_yaxes(title_text="Z-Diff",row=2,col=1)
-    fig.update_yaxes(showticklabels=False,row=1,col=2)
+    fig.add_trace(go.Bar(
+        x=counts, y=centers, orientation="h",
+        marker_color=hcols, marker_line_width=0,
+        opacity=0.85, showlegend=False
+    ), row=1, col=2)
+    fig.add_hline(y=price, line_color="rgba(255,255,255,0.7)",
+                   line_dash="dot", line_width=1.5, row=1, col=2)
+
+    # Annotation
+    fig.add_annotation(
+        xref="x3 domain", yref="y3 domain",
+        x=0.5, y=1.0, yanchor="top",
+        text=f"▲ {bull_pct:.1f}%",
+        showarrow=False,
+        font=dict(size=18, color=GREEN if bull_pct>=50 else RED,
+                  family="Rajdhani"),
+    )
+
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor=BG, plot_bgcolor=S1,
+        height=600, margin=dict(l=8,r=8,t=8,b=8),
+        legend=dict(orientation="h", y=1.02, x=0,
+                    font=dict(size=10), bgcolor="rgba(0,0,0,0)"),
+        xaxis_rangeslider_visible=False,
+    )
+    fig.update_xaxes(gridcolor=BORDER)
+    fig.update_yaxes(gridcolor=BORDER)
+    fig.update_yaxes(title_text="Precio H4", row=1, col=1)
+    fig.update_yaxes(title_text="Z-Diff",    row=2, col=1)
+    fig.update_xaxes(title_text="Simulaciones", row=1, col=2)
+    fig.update_yaxes(showticklabels=False, row=1, col=2)
     return fig, bull_pct
 
 
-def chart_volatility(df, vd, mc_paths):
-    price   = float(df["Close"].iloc[-1])
-    last_ts = df.index[-1]; h4d=timedelta(hours=4)
-    steps   = mc_paths.shape[1]; fts=[last_ts+h4d*(i+1) for i in range(steps)]
-    sh4     = vd["sigma_1d"]/np.sqrt(H4_PER_DAY); ts=np.arange(1,steps+1)
-    c1u=[price*np.exp( sh4*np.sqrt(t)) for t in ts]
-    c1d=[price*np.exp(-sh4*np.sqrt(t)) for t in ts]
-    c2u=[price*np.exp( 2*sh4*np.sqrt(t)) for t in ts]
-    c2d=[price*np.exp(-2*sh4*np.sqrt(t)) for t in ts]
+def fig_volatility(df, vol_data, mc_paths):
+    price    = float(df["Close"].iloc[-1])
+    last_ts  = df.index[-1]
+    h4d      = timedelta(hours=4)
+    steps    = mc_paths.shape[1]
+    fts      = [last_ts + h4d*(i+1) for i in range(steps)]
+    sig_h4   = vol_data["sigma_1d"] / np.sqrt(H4_PER_DAY)
+    ts       = np.arange(1, steps+1)
 
-    fig=make_subplots(rows=2,cols=2,
-        subplot_titles=["Cono de Volatilidad","Volatilidad Realizada Rolling","ATR Multi-Periodo (% precio)","Distribución de Retornos vs Normal"],
-        vertical_spacing=0.14,horizontal_spacing=0.1)
+    c1u = [price*np.exp( sig_h4*np.sqrt(t)) for t in ts]
+    c1d = [price*np.exp(-sig_h4*np.sqrt(t)) for t in ts]
+    c2u = [price*np.exp( 2*sig_h4*np.sqrt(t)) for t in ts]
+    c2d = [price*np.exp(-2*sig_h4*np.sqrt(t)) for t in ts]
 
-    fig.add_trace(go.Scatter(x=df.index[-40:],y=df["Close"].values[-40:],
-        line=dict(color=TEXT,width=1.5),showlegend=False,name="Precio"),row=1,col=1)
-    for ya,yb,fc in [(c2u,c2d,"rgba(0,144,255,0.06)"),(c1u,c1d,"rgba(0,144,255,0.15)")]:
-        fig.add_trace(go.Scatter(x=fts+fts[::-1],y=ya+yb[::-1],fill="toself",
-            fillcolor=fc,line=dict(color="rgba(0,0,0,0)"),showlegend=False),row=1,col=1)
-    for arr,clr in [(c1u,"rgba(0,144,255,.6)"),(c1d,"rgba(0,144,255,.6)"),
-                    (c2u,"rgba(0,144,255,.3)"),(c2d,"rgba(0,144,255,.3)")]:
-        fig.add_trace(go.Scatter(x=fts,y=arr,line=dict(color=clr,width=1,dash="dot"),
-            showlegend=False,hoverinfo="skip"),row=1,col=1)
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=[f"Precio H4 + Cono de Volatilidad ({steps} pasos)",
+                        "Volatilidad Realizada Rolling (anualizada)",
+                        "ATR Multi-Periodo — % sobre precio",
+                        "Distribución de Retornos H4 vs Normal"],
+        vertical_spacing=0.14, horizontal_spacing=0.08
+    )
 
-    rv = vd["rv_series"].dropna()*100
-    fig.add_trace(go.Scatter(x=df.index[-len(rv):],y=rv,line=dict(color=ORANGE,width=1.5),
-        fill="toself",fillcolor="rgba(255,145,0,0.08)",showlegend=False),row=1,col=2)
-    fig.add_hline(y=float(rv.mean()),line_dash="dash",line_color="rgba(255,145,0,0.4)",row=1,col=2)
-    fig.add_annotation(xref="x2 domain",yref="y2 domain",x=0.02,y=0.98,
-        text=f"RV actual: {vd['rv_current']*100:.2f}%  |  Régimen: {vd['vol_regime']}",
-        showarrow=False,font=dict(size=10,color=vd["vol_color"]),xanchor="left",yanchor="top")
+    # Price + cones
+    fig.add_trace(go.Scatter(x=df.index[-40:], y=df["Close"].values[-40:],
+                              line=dict(color=TEXT, width=1.5),
+                              showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=fts+fts[::-1], y=c2u+c2d[::-1],
+        fill="toself", fillcolor="rgba(0,144,255,0.07)",
+        line=dict(color="rgba(0,0,0,0)"), name="2σ (95%)"
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=fts+fts[::-1], y=c1u+c1d[::-1],
+        fill="toself", fillcolor="rgba(0,144,255,0.17)",
+        line=dict(color="rgba(0,0,0,0)"), name="1σ (68%)"
+    ), row=1, col=1)
+    for arr, clr in [(c1u,"rgba(0,144,255,.6)"),(c1d,"rgba(0,144,255,.6)"),
+                     (c2u,"rgba(0,144,255,.3)"),(c2d,"rgba(0,144,255,.3)")]:
+        fig.add_trace(go.Scatter(x=fts, y=arr,
+                                  line=dict(color=clr, width=1, dash="dot"),
+                                  showlegend=False, hoverinfo="skip"), row=1, col=1)
 
-    aw=list(vd["atr"].keys()); av=list(vd["atr"].values()); ap=[v/price*100 for v in av]
-    dec=1 if price>1000 else 2 if price>100 else 5
-    fig.add_trace(go.Bar(x=[f"{w}v" for w in aw],y=ap,
-        marker_color=[CYAN,BLUE,ORANGE,PURPLE][:len(aw)],
-        text=[f"{v:.{dec}f}" for v in av],textposition="outside",showlegend=False),row=2,col=1)
+    # Realized vol rolling
+    rv  = vol_data["rv_series"].dropna() * 100
+    fig.add_trace(go.Scatter(
+        x=df.index[-len(rv):], y=rv,
+        line=dict(color=ORANGE, width=1.5),
+        fill="toself", fillcolor="rgba(255,145,0,0.1)",
+        showlegend=False
+    ), row=1, col=2)
+    fig.add_hline(y=float(rv.mean()),
+                   line_dash="dash", line_color="rgba(255,145,0,0.4)", row=1, col=2)
 
-    rets=np.diff(np.log(df["Close"].values.astype(float)))*100
-    fig.add_trace(go.Histogram(x=rets,nbinsx=40,
-        marker_color="rgba(0,144,255,0.55)",showlegend=False),row=2,col=2)
-    xf=np.linspace(rets.min(),rets.max(),100)
-    yf=stats.norm.pdf(xf,rets.mean(),rets.std())*len(rets)*(xf[1]-xf[0])
-    fig.add_trace(go.Scatter(x=xf,y=yf,line=dict(color=ORANGE,width=2),showlegend=False),row=2,col=2)
-    kurt=float(stats.kurtosis(rets)); skew=float(stats.skew(rets))
-    fig.add_annotation(xref="x4 domain",yref="y4 domain",x=0.98,y=0.95,
-        text=f"Kurt: {kurt:.2f}  Skew: {skew:.2f}",showarrow=False,align="right",
-        font=dict(size=10,color=ORANGE if abs(kurt)>1 else MUTED),xanchor="right",yanchor="top")
+    # ATR %
+    aw  = list(vol_data["atr"].keys())
+    av  = list(vol_data["atr"].values())
+    ap  = [v/price*100 for v in av]
+    dec = 1 if price>1000 else 2 if price>100 else 5
+    fig.add_trace(go.Bar(
+        x=[f"{w}v" for w in aw], y=ap,
+        marker_color=[CYAN, BLUE, ORANGE, PURPLE][:len(aw)],
+        text=[f"{v:.{dec}f}" for v in av],
+        textposition="outside", showlegend=False
+    ), row=2, col=1)
 
-    fig.update_layout(template="plotly_dark",paper_bgcolor=BG,plot_bgcolor=S1,
-        height=620,margin=dict(l=8,r=8,t=40,b=8),showlegend=False)
-    fig.update_xaxes(gridcolor=BORDER); fig.update_yaxes(gridcolor=BORDER)
+    # Return distribution
+    rets = np.diff(np.log(df["Close"].values.astype(float))) * 100
+    fig.add_trace(go.Histogram(
+        x=rets, nbinsx=40,
+        marker_color="rgba(0,144,255,0.6)",
+        showlegend=False
+    ), row=2, col=2)
+    xf = np.linspace(rets.min(), rets.max(), 100)
+    yf = stats.norm.pdf(xf, rets.mean(), rets.std()) * len(rets) * (xf[1]-xf[0])
+    fig.add_trace(go.Scatter(x=xf, y=yf,
+                              line=dict(color=ORANGE, width=2),
+                              showlegend=False), row=2, col=2)
+
+    # Kurtosis annotation
+    kurt = float(stats.kurtosis(rets))
+    skew = float(stats.skew(rets))
+    fig.add_annotation(
+        xref="x4 domain", yref="y4 domain", x=0.98, y=0.95,
+        text=f"Kurt: {kurt:.2f}<br>Skew: {skew:.2f}",
+        showarrow=False, align="right",
+        font=dict(size=10, color=MUTED),
+        xanchor="right", yanchor="top"
+    )
+
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor=BG, plot_bgcolor=S1,
+        height=620, margin=dict(l=8,r=8,t=40,b=8), showlegend=True
+    )
+    fig.update_xaxes(gridcolor=BORDER)
+    fig.update_yaxes(gridcolor=BORDER)
+    fig.update_yaxes(title_text="Precio",      row=1, col=1)
+    fig.update_yaxes(title_text="Vol Anual %", row=1, col=2)
+    fig.update_yaxes(title_text="ATR %",       row=2, col=1)
+    fig.update_yaxes(title_text="Frecuencia",  row=2, col=2)
     return fig
 
 
-def chart_volume_profile(df, vp, vwap, delta, danom):
-    price=float(df["Close"].iloc[-1]); dec=1 if price>1000 else 2 if price>100 else 5
-    fig=make_subplots(rows=2,cols=2,
-        column_widths=[0.72,0.28],row_heights=[0.62,0.38],
-        shared_xaxes=False,horizontal_spacing=0.02,vertical_spacing=0.08,
-        specs=[[{"type":"xy"},{"type":"bar","rowspan":2}],[{"type":"bar"},None]],
-        subplot_titles=["Velas + VWAP + Zonas","Perfil de Volumen","Volume Delta",""])
-
-    fig.add_trace(go.Candlestick(x=df.index,open=df["Open"],high=df["High"],
-        low=df["Low"],close=df["Close"],
-        increasing_fillcolor=GREEN,increasing_line_color=GREEN,
-        decreasing_fillcolor=RED,decreasing_line_color=RED,showlegend=False),row=1,col=1)
-    fig.add_trace(go.Scatter(x=df.index,y=vwap,
-        line=dict(color=YELLOW,width=1.5,dash="dash"),name="VWAP"),row=1,col=1)
-    fig.add_hline(y=vp["poc"],line_color=ORANGE,line_width=2,row=1,col=1,
-        annotation_text=f"POC {vp['poc']:.{dec}f}",annotation_font_color=ORANGE,annotation_position="right")
-    fig.add_hrect(y0=vp["val"],y1=vp["vah"],fillcolor="rgba(0,144,255,0.07)",line_width=0,row=1,col=1)
-    fig.add_hline(y=vp["vah"],line_color="rgba(0,144,255,.5)",line_width=1,line_dash="dot",row=1,col=1,
-        annotation_text=f"VAH {vp['vah']:.{dec}f}",annotation_font_color=BLUE,annotation_position="right")
-    fig.add_hline(y=vp["val"],line_color="rgba(0,144,255,.5)",line_width=1,line_dash="dot",row=1,col=1,
-        annotation_text=f"VAL {vp['val']:.{dec}f}",annotation_font_color=BLUE,annotation_position="right")
-
-    for _,row_d in danom[danom["anomaly"]!="NORMAL"].iterrows():
-        ac={"ABSORCIÓN":PURPLE,"SPIKE VOL":ORANGE,"MOMENTUM":CYAN,"RUPTURA SECA":YELLOW}.get(row_d["anomaly"],TEXT)
-        fig.add_trace(go.Scatter(x=[row_d.name],y=[float(row_d["High"])*1.001],
-            mode="markers+text",marker=dict(symbol="triangle-down",size=9,color=ac),
-            text=[row_d["anomaly"][:3]],textposition="top center",
-            textfont=dict(size=8,color=ac),showlegend=False),row=1,col=1)
-
-    va_m=(vp["centers"]>=vp["val"])&(vp["centers"]<=vp["vah"])
-    poc_w=(vp["price_max"]-vp["price_min"])/len(vp["centers"])
-    bc=[ORANGE if abs(c-vp["poc"])<poc_w else BLUE if va_m[i] else MUTED
-        for i,c in enumerate(vp["centers"])]
-    fig.add_trace(go.Bar(x=vp["vol_bins"],y=vp["centers"],orientation="h",
-        marker_color=bc,marker_line_width=0,opacity=0.85,showlegend=False),row=1,col=2)
-    fig.add_hline(y=price,line_color="rgba(255,255,255,0.6)",line_width=1.5,line_dash="dot",row=1,col=2)
-
-    fig.add_trace(go.Bar(x=df.index,y=delta.values,
-        marker_color=[GREEN if d>=0 else RED for d in delta.values],
-        marker_line_width=0,opacity=0.8,showlegend=False),row=2,col=1)
-    fig.add_hline(y=0,line_color="rgba(255,255,255,.15)",line_dash="dot",row=2,col=1)
-
-    fig.update_layout(template="plotly_dark",paper_bgcolor=BG,plot_bgcolor=S1,
-        height=640,margin=dict(l=8,r=8,t=30,b=8),
-        legend=dict(orientation="h",y=1.02,bgcolor="rgba(0,0,0,0)"),
-        xaxis_rangeslider_visible=False)
-    fig.update_xaxes(gridcolor=BORDER); fig.update_yaxes(gridcolor=BORDER)
-    fig.update_yaxes(showticklabels=False,row=1,col=2)
+def fig_markov(markov):
+    T      = markov["transition"]
+    labels = markov["labels"]
+    fig    = make_subplots(rows=1, cols=2,
+                            subplot_titles=["Matriz de Transición",
+                                            "P(Estado) — Próximo Día"],
+                            horizontal_spacing=0.14)
+    fig.add_trace(go.Heatmap(
+        z=T*100, x=labels, y=labels,
+        colorscale=[[0,BG],[0.5,"rgba(0,144,255,.4)"],[1,CYAN]],
+        text=[[f"{v:.0f}%" for v in row] for row in T*100],
+        texttemplate="%{text}", showscale=False
+    ), row=1, col=1)
+    nd = markov["next_day"]
+    fig.add_trace(go.Bar(
+        x=labels, y=nd*100,
+        marker_color=[RED, YELLOW, GREEN],
+        text=[f"{v*100:.1f}%" for v in nd],
+        textposition="outside", showlegend=False
+    ), row=1, col=2)
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor=BG, plot_bgcolor=S1,
+        height=320, margin=dict(l=8,r=8,t=40,b=8)
+    )
+    fig.update_yaxes(title_text="Prob %", row=1, col=2)
     return fig
 
 
-def chart_real_rates(macro: dict) -> go.Figure:
-    """Gráfico tipos reales: Fed Funds, PCE Core, Tipo Real aproximado, TIPS."""
-    fig = make_subplots(rows=2, cols=2,
-        subplot_titles=[
-            "Tipos Reales = Fed Funds − PCE Core",
-            "Tipos TIPS (Reales directos del mercado)",
-            "Curva de Tipos del Tesoro EEUU",
-            "Spreads & Riesgo Recesión",
-        ],
-        vertical_spacing=0.14, horizontal_spacing=0.10)
+def fig_volume_profile(df, vp, vwap, delta, df_anom):
+    """Gráfico de perfil de volumen con VWAP, delta y anomalías."""
+    price = float(df["Close"].iloc[-1])
+    dec   = 1 if price>1000 else 2 if price>100 else 5
 
-    # ── Panel 1: Tipos reales aproximados ────────────────────────────────────
-    if "FEDFUNDS" in macro and "PCEPILFE" in macro:
-        ff  = macro["FEDFUNDS"]["series"]
-        pce = macro["PCEPILFE"]["series"]
-        ff_r, pce_r = ff.reindex(pce.index, method="ffill").dropna(), pce
-        idx  = ff_r.index.intersection(pce_r.index)
-        real = ff_r.loc[idx] - pce_r.loc[idx]
+    fig = make_subplots(
+        rows=2, cols=2,
+        column_widths=[0.72, 0.28],
+        row_heights=[0.62, 0.38],
+        shared_xaxes=False,
+        horizontal_spacing=0.02, vertical_spacing=0.08,
+        specs=[[{"type":"xy"}, {"type":"bar","rowspan":2}],
+               [{"type":"bar"}, None]],
+        subplot_titles=["", "Perfil de Volumen", "Volume Delta", ""]
+    )
 
-        fig.add_trace(go.Scatter(x=ff_r.index,y=ff_r.values,name="Fed Funds",
-            line=dict(color=CYAN,width=2)),row=1,col=1)
-        fig.add_trace(go.Scatter(x=pce_r.index,y=pce_r.values,name="PCE Core",
-            line=dict(color=ORANGE,width=2)),row=1,col=1)
-        fig.add_trace(go.Scatter(x=real.index,y=real.values,name="Tipo Real",
-            line=dict(color=GREEN,width=2.5),fill="tozeroy",
-            fillcolor="rgba(0,230,118,0.08)"),row=1,col=1)
-        fig.add_hline(y=0,line_color="rgba(255,255,255,.3)",line_dash="dot",row=1,col=1)
+    # ── Candlestick + VWAP ────────────────────────────────────────────────────
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"],
+        increasing_fillcolor=GREEN, increasing_line_color=GREEN,
+        decreasing_fillcolor=RED,   decreasing_line_color=RED,
+        name="H4", showlegend=False
+    ), row=1, col=1)
 
-        # Annotate current real rate
-        cur_rr = float(real.iloc[-1])
-        fig.add_annotation(x=real.index[-1],y=cur_rr,
-            text=f" RR actual: {cur_rr:+.2f}%",
-            showarrow=False,font=dict(size=11,color=GREEN if cur_rr>0 else RED),
-            xanchor="left",row=1,col=1)
+    # VWAP
+    fig.add_trace(go.Scatter(
+        x=df.index, y=vwap,
+        line=dict(color=YELLOW, width=1.5, dash="dash"),
+        name="VWAP"
+    ), row=1, col=1)
 
-    # ── Panel 2: TIPS reales ─────────────────────────────────────────────────
-    tips_colors = {
-        "DFII2": (CYAN,   "Real 2Y (TIPS)"),
-        "DFII5": (BLUE,   "Real 5Y (TIPS)"),
-        "DFII10":(GREEN,  "Real 10Y (TIPS)"),
-    }
-    for sid,(col_t,name_t) in tips_colors.items():
-        if sid in macro:
-            s=macro[sid]["series"]
-            fig.add_trace(go.Scatter(x=s.index,y=s.values,name=name_t,
-                line=dict(color=col_t,width=1.5)),row=1,col=2)
-    fig.add_hline(y=0,line_color="rgba(255,255,255,.3)",line_dash="dot",row=1,col=2)
-    # Zero-line annotation
-    fig.add_annotation(xref="x2 domain",yref="y2 domain",x=0.02,y=0.05,
-        text="0% = tipos reales neutros",showarrow=False,
-        font=dict(size=9,color=MUTED),xanchor="left",yanchor="bottom")
+    # POC line
+    fig.add_hline(y=vp["poc"], line_color=ORANGE, line_width=2,
+                   line_dash="solid", row=1, col=1,
+                   annotation_text=f"POC {vp['poc']:.{dec}f}",
+                   annotation_font_color=ORANGE, annotation_position="right")
 
-    # ── Panel 3: Curva de tipos (snapshot actual) ─────────────────────────────
-    curve_map = {"DGS2":"2Y","DGS5":"5Y","DGS10":"10Y","DGS30":"30Y"}
-    maturities, yields = [], []
-    for sid, mat in curve_map.items():
-        if sid in macro:
-            maturities.append(mat); yields.append(macro[sid]["latest"])
-    if maturities:
-        y_c = [GREEN if y==max(yields) else RED if y==min(yields) else CYAN for y in yields]
-        fig.add_trace(go.Scatter(x=maturities,y=yields,mode="lines+markers",
-            name="Curva actual",line=dict(color=CYAN,width=2),
-            marker=dict(color=y_c,size=10)),row=2,col=1)
-        # Historical curve comparison (12m ago)
-        hist_yields = []
-        for sid in curve_map:
-            if sid in macro:
-                s = macro[sid]["series"]
-                if len(s)>=252:
-                    hist_yields.append(float(s.iloc[-252]))
-                else:
-                    hist_yields.append(None)
-        if any(v is not None for v in hist_yields):
-            hy_clean = [v for v in hist_yields if v is not None]
-            hm_clean = [m for m,v in zip(maturities,hist_yields) if v is not None]
-            fig.add_trace(go.Scatter(x=hm_clean,y=hy_clean,mode="lines",
-                name="Hace 12 meses",
-                line=dict(color=MUTED,width=1.5,dash="dash")),row=2,col=1)
+    # VAH / VAL
+    fig.add_hrect(y0=vp["val"], y1=vp["vah"],
+                   fillcolor="rgba(0,144,255,0.07)",
+                   line_width=0, row=1, col=1)
+    fig.add_hline(y=vp["vah"], line_color="rgba(0,144,255,.5)",
+                   line_width=1, line_dash="dot", row=1, col=1,
+                   annotation_text=f"VAH {vp['vah']:.{dec}f}",
+                   annotation_font_color=BLUE, annotation_position="right")
+    fig.add_hline(y=vp["val"], line_color="rgba(0,144,255,.5)",
+                   line_width=1, line_dash="dot", row=1, col=1,
+                   annotation_text=f"VAL {vp['val']:.{dec}f}",
+                   annotation_font_color=BLUE, annotation_position="right")
 
-    # ── Panel 4: Spreads ──────────────────────────────────────────────────────
-    spread_map = {"T10Y2Y":"Spread 10Y−2Y","T10Y3M":"Spread 10Y−3M"}
-    for sid, name_s in spread_map.items():
-        if sid in macro:
-            s=macro[sid]["series"]
-            clr=[RED if v<0 else GREEN for v in s.values]
-            fig.add_trace(go.Bar(x=s.index,y=s.values,name=name_s,
-                marker_color=clr,opacity=0.7),row=2,col=2)
-    fig.add_hline(y=0,line_color="rgba(255,255,255,.4)",line_width=1.5,row=2,col=2)
-    fig.add_hrect(y0=-5,y1=0,fillcolor="rgba(255,23,68,0.04)",line_width=0,row=2,col=2)
-    fig.add_annotation(xref="x4 domain",yref="y4 domain",x=0.02,y=0.05,
-        text="Zona invertida = señal recesión",showarrow=False,
-        font=dict(size=9,color=RED),xanchor="left",yanchor="bottom")
+    # Anomaly markers
+    for _, row_d in df_anom[df_anom["anomaly"] != "NORMAL"].iterrows():
+        acolor = {
+            "ABSORCIÓN":    PURPLE,
+            "SPIKE VOLUMEN": ORANGE,
+            "MOMENTUM":     CYAN,
+            "RUPTURA SECA": YELLOW,
+        }.get(row_d["anomaly"], TEXT)
+        fig.add_trace(go.Scatter(
+            x=[row_d.name], y=[float(row_d["High"]) * 1.001],
+            mode="markers+text",
+            marker=dict(symbol="triangle-down", size=10, color=acolor),
+            text=[row_d["anomaly"][:3]], textposition="top center",
+            textfont=dict(size=8, color=acolor),
+            showlegend=False, hovertext=row_d["anomaly"]
+        ), row=1, col=1)
 
-    fig.update_layout(template="plotly_dark",paper_bgcolor=BG,plot_bgcolor=S1,
-        height=650,margin=dict(l=8,r=8,t=40,b=8),
-        legend=dict(orientation="h",y=-0.05,bgcolor="rgba(0,0,0,0)",font=dict(size=10)))
-    fig.update_xaxes(gridcolor=BORDER); fig.update_yaxes(gridcolor=BORDER)
-    fig.update_yaxes(title_text="Tasa %",row=1,col=1)
-    fig.update_yaxes(title_text="Tasa Real %",row=1,col=2)
-    fig.update_yaxes(title_text="Rendimiento %",row=2,col=1)
-    fig.update_yaxes(title_text="Spread %",row=2,col=2)
+    # ── Volume Profile (horizontal bars) ──────────────────────────────────────
+    poc_mask = vp["centers"] == vp["poc"]
+    va_mask  = (vp["centers"] >= vp["val"]) & (vp["centers"] <= vp["vah"])
+    bar_colors = []
+    for i, c in enumerate(vp["centers"]):
+        if abs(c - vp["poc"]) < (vp["price_max"]-vp["price_min"])/len(vp["centers"]):
+            bar_colors.append(ORANGE)   # POC
+        elif va_mask[i]:
+            bar_colors.append(BLUE)     # Value Area
+        else:
+            bar_colors.append(MUTED)    # fuera VA
+
+    fig.add_trace(go.Bar(
+        x=vp["vol_bins"], y=vp["centers"],
+        orientation="h",
+        marker_color=bar_colors, marker_line_width=0,
+        opacity=0.85, showlegend=False,
+        hovertemplate="Precio: %{y:.5f}<br>Vol: %{x:,.0f}<extra></extra>"
+    ), row=1, col=2)
+
+    # Price line on profile
+    fig.add_hline(y=price, line_color="rgba(255,255,255,0.6)",
+                   line_width=1.5, line_dash="dot", row=1, col=2)
+
+    # ── Volume Delta bars ─────────────────────────────────────────────────────
+    delta_colors = [GREEN if d >= 0 else RED for d in delta.values]
+    fig.add_trace(go.Bar(
+        x=df.index, y=delta.values,
+        marker_color=delta_colors, marker_line_width=0,
+        opacity=0.8, showlegend=False, name="Vol Delta"
+    ), row=2, col=1)
+    fig.add_hline(y=0, line_color="rgba(255,255,255,.2)",
+                   line_dash="dot", row=2, col=1)
+
+    # Cumulative delta line
+    cum_delta = delta.cumsum()
+    fig.add_trace(go.Scatter(
+        x=df.index, y=cum_delta.values,
+        line=dict(color=CYAN, width=1.5),
+        name="Delta Acumulado",
+        yaxis="y5"
+    ), row=2, col=1)
+
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor=BG, plot_bgcolor=S1,
+        height=640, margin=dict(l=8,r=8,t=30,b=8),
+        legend=dict(orientation="h", y=1.02, bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
+        xaxis_rangeslider_visible=False,
+        barmode="overlay",
+        yaxis5=dict(overlaying="y3", side="right", showgrid=False,
+                    showticklabels=False, title="Δ Acum."),
+    )
+    fig.update_xaxes(gridcolor=BORDER)
+    fig.update_yaxes(gridcolor=BORDER)
+    fig.update_yaxes(title_text="Precio H4", row=1, col=1)
+    fig.update_xaxes(title_text="Volumen",   row=1, col=2)
+    fig.update_yaxes(showticklabels=False,   row=1, col=2)
+    fig.update_yaxes(title_text="Delta",     row=2, col=1)
     return fig
 
 
-def chart_macro_indicators(macro: dict) -> go.Figure:
-    """Panel secundario: VIX, desempleo, condiciones financieras."""
-    fig = make_subplots(rows=1, cols=3,
-        subplot_titles=["VIX — Volatilidad Implícita","Desempleo EEUU","Cond. Financieras Chicago Fed"],
-        horizontal_spacing=0.08)
+# ═══════════════════════════════════════════════════════════════════════════════
+#  SIDEBAR
+# ═══════════════════════════════════════════════════════════════════════════════
+with st.sidebar:
+    st.markdown(f"<div style='font-family:Rajdhani,sans-serif;font-size:22px;"
+                f"font-weight:700;color:{CYAN};letter-spacing:3px'>"
+                f"ORDER<span style='color:{YELLOW}'>FLOW</span> PRO</div>",
+                unsafe_allow_html=True)
+    st.caption("Dashboard Cuantitativo · H4 · Sin API Key")
+    st.divider()
 
-    if "VIXCLS" in macro:
-        s=macro["VIXCLS"]["series"]
-        clr=[RED if v>30 else ORANGE if v>20 else GREEN for v in s.values]
-        fig.add_trace(go.Scatter(x=s.index,y=s.values,name="VIX",
-            line=dict(color=ORANGE,width=1.5),fill="tozeroy",
-            fillcolor="rgba(255,145,0,0.08)"),row=1,col=1)
-        fig.add_hline(y=20,line_color="rgba(255,145,0,.4)",line_dash="dash",row=1,col=1)
-        fig.add_hline(y=30,line_color="rgba(255,23,68,.4)",line_dash="dash",row=1,col=1)
+    st.markdown("### Activo")
+    quick = st.selectbox("Acceso rápido", list(QUICK_MAP.keys()))
+    default_sym, default_type = QUICK_MAP[quick]
+    ticker     = st.text_input("Símbolo Yahoo Finance", value=default_sym,
+                                placeholder="ES=F, NQ=F, GC=F, EURUSD=X...")
 
-    if "UNRATE" in macro:
-        s=macro["UNRATE"]["series"]
-        fig.add_trace(go.Scatter(x=s.index,y=s.values,name="Desempleo",
-            line=dict(color=CYAN,width=1.5),fill="tozeroy",
-            fillcolor="rgba(0,229,255,0.06)"),row=1,col=2)
+    # Show futures note
+    if ticker in FUTURES_NOTE:
+        st.caption(f"🔄 **{FUTURES_NOTE[ticker]}** — cotiza ~23h/día")
+    elif ticker in ("^GSPC","^GDAXI","^IXIC"):
+        st.warning("⚠️ Índice spot — solo datos en horario de bolsa. Usa `ES=F`, `NQ=F` o `FDAX=F` para datos continuos 23h.", icon="⏰")
 
-    if "NFCI" in macro:
-        s=macro["NFCI"]["series"]
-        fig.add_trace(go.Bar(x=s.index,y=s.values,name="NFCI",
-            marker_color=[RED if v>0 else GREEN for v in s.values],opacity=0.7),row=1,col=3)
-        fig.add_hline(y=0,line_color="rgba(255,255,255,.3)",row=1,col=3)
-        fig.add_annotation(xref="x3 domain",yref="y3 domain",x=0.02,y=0.98,
-            text=">0 = condiciones restrictivas",showarrow=False,
-            font=dict(size=9,color=MUTED),xanchor="left",yanchor="top")
+    asset_type = st.selectbox("Tipo",
+                               ["forex","index","commodity","stock","crypto"],
+                               index=["forex","index","commodity","stock","crypto"].index(default_type))
 
-    fig.update_layout(template="plotly_dark",paper_bgcolor=BG,plot_bgcolor=S1,
-        height=320,margin=dict(l=8,r=8,t=40,b=8),showlegend=False)
-    fig.update_xaxes(gridcolor=BORDER); fig.update_yaxes(gridcolor=BORDER)
-    return fig
+    st.divider()
+    st.markdown("### Modelo")
+    horizon   = st.selectbox("Horizonte", [1, 3, 5],
+                               format_func=lambda x: f"{x} día{'s' if x>1 else ''}")
+    n_candles = st.slider("Velas H4", 30, 90, 60)
+    z_period  = st.slider("Periodo Z-Diff", 10, 30, 14)
+    mc_sims   = st.selectbox("Simulaciones MC", [1000, 3000, 5000], index=1)
+    threshold = st.selectbox("Umbral mínimo %", [60, 65, 70], index=1)
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  GEMINI AI
-# ══════════════════════════════════════════════════════════════════════════════
+    st.divider()
+    st.markdown("### Gestión de riesgo")
+    account  = st.number_input("Capital ($)", value=10000, step=500)
+    risk_pct = st.slider("Riesgo %", 0.5, 10.0, 2.0, 0.5)
+    instr    = st.selectbox("Instrumento",
+                             ["Forex std (100k)","Forex mini (10k)","XAU/USD","Índice CFD"])
 
-def build_ai_prompt(ticker, asset_type, r: dict, summ: dict, macro: dict) -> str:
-    """Construye el prompt completo con todos los datos del modelo para Gemini."""
-    price  = r["price"]; dec=1 if price>1000 else 2 if price>100 else 4
-    zctx   = r["zdiff_ctx"]; vd=r["vol_data"]; mk=r["markov"]
-    nd     = mk["next_day"]
-    rr     = summ.get("real_rates",{})
-    today  = datetime.now().strftime("%A, %d de %B de %Y — %H:%M UTC")
+    st.divider()
+    load_btn = st.button("📡 CARGAR DATOS H4", use_container_width=True, type="primary")
+    run_btn  = st.button("▶ EJECUTAR MODELO",  use_container_width=True,
+                          disabled=st.session_state.df is None)
+    st.divider()
+    st.caption("**Símbolos**\n\n`EURUSD=X` `GBPUSD=X` `USDJPY=X`\n\n"
+               "`GC=F` (XAU) · `^GSPC` (SP500)\n\n`^GDAXI` (DAX) · `BTC-USD`")
 
-    macro_block = ""
-    if rr:
-        macro_block = f"""
-Datos macroeconómicos (FRED):
-  - Fed Funds Rate: {rr.get('fed_funds','N/A')}%
-  - PCE Core (objetivo Fed): {rr.get('pce_core','N/A')}%
-  - Tipo Real aproximado (FF-PCE): {rr.get('real_rate_approx','N/A'):+.2f}%
-  - TIPS 10Y (tipo real mercado): {rr.get('DFII10','N/A')}%
-  - Spread 10Y-2Y: {rr.get('spread_10y2y','N/A')}% {'⚠ INVERTIDA' if rr.get('inverted') else ''}
-  - Breakeven inflación 10Y: {rr.get('breakeven_10y','N/A')}%
-  - Entorno macro: {summ['signals'][-1]['lbl']}"""
+# ═══════════════════════════════════════════════════════════════════════════════
+#  LOAD DATA
+# ═══════════════════════════════════════════════════════════════════════════════
+if load_btn and ticker:
+    with st.spinner(f"Descargando {n_candles} velas H4 — {ticker}..."):
+        try:
+            raw = yf.download(ticker, period=TF_PERIOD, interval=TF_INTERVAL,
+                               auto_adjust=True, progress=False)
+            if raw.empty:
+                st.error(f"Sin datos para '{ticker}'.")
+            else:
+                if isinstance(raw.columns, pd.MultiIndex):
+                    raw.columns = raw.columns.get_level_values(0)
+                df = raw.tail(n_candles).copy()
+                df.index = pd.to_datetime(df.index)
+                df = calc_order_flow(df, z_period)
+                st.session_state.df      = df
+                st.session_state.results = None
+                p  = float(df["Close"].iloc[-1])
+                d  = 1 if p>1000 else 2 if p>100 else 5
+                st.sidebar.success(f"✓ {len(df)} velas · {p:.{d}f}")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
-    return f"""Fecha: {today}
+# ═══════════════════════════════════════════════════════════════════════════════
+#  RUN MODEL
+# ═══════════════════════════════════════════════════════════════════════════════
+if run_btn and st.session_state.df is not None:
+    df    = st.session_state.df
+    price = float(df["Close"].iloc[-1])
+    rets  = np.diff(np.log(df["Close"].values.astype(float)))
+    ctx   = st.session_state.context or {}
+    macro = ctx.get("macro", 0)
+    news  = ctx.get("news",  0)
+    vol_v = ctx.get("vol",   "normal")
 
-Eres un analista cuantitativo senior especializado en mercados financieros. Tu análisis debe ser técnico, objetivo y en español. Sin asteriscos ni markdown.
+    with st.spinner("Calculando modelos cuantitativos..."):
+        last_z    = float(df["z_diff"].iloc[-1])
+        z_adj     = float(np.clip(last_z, -2, 2))
+        vm        = 0.7 if vol_v=="low" else 1.5 if vol_v=="high" else 1.0
+        mc_steps  = horizon * H4_PER_DAY
+        zdiff_ctx = interpret_zdiff(last_z, df, macro)
+        mc_paths  = run_mc(price, rets, mc_sims, mc_steps, z_adj, vm)
+        markov    = calc_markov(df)
+        vol_data  = calc_volatility(df)
 
-═══════ DATOS DEL MODELO ═══════
+        final     = mc_paths[:, -1]
+        ctx_boost = (macro + news) / 4 * 8
+        adj_bull  = float(np.clip(np.mean(final>price)*100 + ctx_boost, 10, 90))
+        adj_bear  = 100 - adj_bull
 
-Activo: {ticker} ({asset_type})
-Precio actual: {price:.{dec}f}
+        # Volume models
+        vol_profile = calc_volume_profile(df)
+        vwap_series = calc_vwap(df)
+        delta_series= calc_volume_delta(df)
+        df_anom     = calc_volume_anomalies(df)
 
-ORDER FLOW Z-DIFF:
-  - Z-Diff H4: {r['last_z']:.3f}
-  - Señal: {zctx['signal']}
-  - Posición en rango: {zctx['price_pct']*100:.0f}% (0=mínimos, 100=máximos)
-  - Precio: {'subiendo' if zctx['rising'] else 'cayendo'}
-  - {'Ruptura alcista activa' if zctx['breaking_up'] else 'Ruptura bajista activa' if zctx['breaking_down'] else 'Sin ruptura'}
-
-MONTE CARLO (GBM, 3000 sims):
-  - P(alcista): {r['adj_bull']:.1f}%
-  - Rango IC 90%: [{r['p5']:.{dec}f}, {r['p95']:.{dec}f}]
-  - Media MC: {float(r['final'].mean()):.{dec}f}
-
-CADENAS DE MARKOV:
-  - Estado actual: {mk['current_label']}
-  - P(alcista mañana): {nd[2]*100:.1f}%
-  - P(bajista mañana): {nd[0]*100:.1f}%
-
-VOLATILIDAD:
-  - Realizada 14v: {vd['rv_current']*100:.2f}% anualizada
-  - Garman-Klass: {vd['garman_klass']*100:.2f}%
-  - Régimen: {vd['vol_regime']}
-  - Movimiento 1σ/día: ±{vd['price_1s']:.{dec}f}
-{macro_block}
-
-SCORE TOTAL DEL MODELO: {summ['total']:+.0f}/100
-Veredicto cuantitativo: {summ['verdict']}
-Convicción: {summ['conviction']}
-
-═══════ ANÁLISIS SOLICITADO ═══════
-
-1. Analiza la coherencia entre el Z-Diff, el Monte Carlo y el régimen de volatilidad.
-2. Interpreta qué está haciendo el flujo institucional según el contexto del precio (posición en rango, ruptura/rebote).
-3. Comenta el entorno macroeconómico: tipos reales, curva de tipos y su impacto en este activo.
-4. Identifica el escenario más probable para las próximas 24-48 horas.
-5. Señala los niveles clave a vigilar (soporte/resistencia cuantitativa).
-
-Responde en 5-6 párrafos concisos. No des recomendaciones de compra o venta explícitas."""
+        st.session_state.results = dict(
+            price=price, last_z=last_z, last_rmf=float(df["rmf"].iloc[-1]),
+            adj_bull=adj_bull, adj_bear=adj_bear,
+            mc_paths=mc_paths, final=final,
+            zdiff_ctx=zdiff_ctx, markov=markov, vol_data=vol_data,
+            macro=macro, news=news, rets=rets,
+            p5  = float(np.percentile(final, 5)),
+            p95 = float(np.percentile(final, 95)),
+            p20 = float(np.percentile(final, 20)),
+            p80 = float(np.percentile(final, 80)),
+            p8  = float(np.percentile(final, 8)),
+            p92 = float(np.percentile(final, 92)),
+            # Volume
+            vol_profile  = vol_profile,
+            vwap_series  = vwap_series,
+            delta_series = delta_series,
+            df_anom      = df_anom,
+        )
+        st.session_state.macro_prompt = build_macro_prompt(ticker, asset_type, horizon)
 
 
-def call_gemini(prompt: str, api_key: str) -> str:
-    """Llama a Gemini 2.0 Flash con la key del cliente."""
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        resp  = model.generate_content(prompt)
-        return resp.text
-    except ImportError:
-        # Fallback: REST API directa
-        url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-        body = {"contents":[{"parts":[{"text":prompt}]}]}
-        r    = requests.post(url, json=body, timeout=30)
-        r.raise_for_status()
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        return f"Error al conectar con Gemini: {e}\n\nVerifica que tu API key sea correcta y tengas acceso a Gemini 2.0 Flash."
+# ═══════════════════════════════════════════════════════════════════════════════
+#  HEADER + GUARD
+# ═══════════════════════════════════════════════════════════════════════════════
+r = st.session_state.results
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  HELPERS UI
-# ══════════════════════════════════════════════════════════════════════════════
+st.markdown(f"""
+<div style='display:flex;align-items:baseline;gap:16px;margin-bottom:4px'>
+  <span style='font-family:Rajdhani,sans-serif;font-size:30px;font-weight:700;
+    color:{CYAN};letter-spacing:4px'>ORDER<span style='color:{YELLOW}'>FLOW</span> PRO</span>
+  <span style='font-size:11px;color:{MUTED};letter-spacing:2px'>H4 · DASHBOARD CUANTITATIVO · SIN API KEY</span>
+</div>
+""", unsafe_allow_html=True)
+
+if r is None:
+    st.info("👈 **Carga los datos H4** y pulsa **Ejecutar Modelo** para ver el análisis completo.")
+    st.stop()
+
+# Global KPI bar
+price = r["price"]
+dec   = 1 if price>1000 else 2 if price>100 else 4
+bc    = GREEN if r["adj_bull"]>=60 else RED if r["adj_bull"]<=40 else YELLOW
+bt    = ("SESGO ALCISTA ▲" if r["adj_bull"]>=60
+         else "SESGO BAJISTA ▼" if r["adj_bull"]<=40 else "SESGO NEUTRAL ➡")
+zctx  = r["zdiff_ctx"]
+vdata = r["vol_data"]
+mk    = r["markov"]
 
 def kpi(col, lbl, val, sub="", color=TEXT):
     col.markdown(f"""<div class='kpi'>
@@ -880,701 +1276,699 @@ def kpi(col, lbl, val, sub="", color=TEXT):
         <div class='kpi-sub'>{sub}</div>
     </div>""", unsafe_allow_html=True)
 
-
-def info_card(title, body, border_color=CYAN, bg=S0):
-    st.markdown(f"""<div style='background:{bg};border:1px solid {BORDER};
-        border-left:4px solid {border_color};border-radius:6px;
-        padding:16px 20px;margin:8px 0'>
-        <div style='font-size:9px;letter-spacing:3px;color:{border_color};
-            text-transform:uppercase;margin-bottom:8px;font-family:JetBrains Mono,monospace'>{title}</div>
-        <div style='font-size:13px;color:{TEXT};line-height:1.75'>{body}</div>
-    </div>""", unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  SIDEBAR
-# ══════════════════════════════════════════════════════════════════════════════
-with st.sidebar:
-    st.markdown(f"""<div style='padding:16px 0 8px'>
-        <div style='font-family:Rajdhani,sans-serif;font-size:24px;font-weight:700;
-            color:{CYAN};letter-spacing:3px'>Quant<span style='color:{YELLOW}'>Edge</span>
-            <span style='font-size:14px;color:{MUTED}'>PRO</span></div>
-        <div style='font-size:10px;color:{MUTED};letter-spacing:2px'>v{APP_VERSION} · Dashboard Cuantitativo</div>
-    </div>""", unsafe_allow_html=True)
-    st.divider()
-
-    # Gemini API Key
-    with st.expander("🔑 Gemini API Key", expanded=not bool(st.session_state.get("gemini_key",""))):
-        st.caption("Obtén tu key gratis en [aistudio.google.com](https://aistudio.google.com/apikey)")
-        gemini_key = st.text_input("API Key", type="password",
-                                    value=st.session_state.get("gemini_key",""),
-                                    placeholder="AIza...",
-                                    label_visibility="collapsed")
-        if gemini_key:
-            st.session_state["gemini_key"] = gemini_key
-            st.success("✓ Key configurada")
-    st.divider()
-
-    st.markdown("#### Activo")
-    quick = st.selectbox("Acceso rápido", list(QUICK_MAP.keys()))
-    default_sym, default_type = QUICK_MAP[quick]
-    ticker = st.text_input("Símbolo Yahoo Finance", value=default_sym,
-                            placeholder="ES=F, NQ=F, EURUSD=X...")
-    if ticker in FUTURES_NOTE:
-        st.caption(f"🔄 {FUTURES_NOTE[ticker]} — 23h/día")
-    elif ticker in ("^GSPC","^GDAXI","^IXIC"):
-        st.warning("Índice spot. Usa ES=F/NQ=F para datos continuos.")
-    asset_type = st.selectbox("Tipo de activo",
-        ["forex","index","commodity","stock","crypto"],
-        index=["forex","index","commodity","stock","crypto"].index(default_type))
-
-    st.divider()
-    st.markdown("#### Modelo H4")
-    horizon   = st.selectbox("Horizonte", [1,3,5], format_func=lambda x: f"{x} día{'s' if x>1 else ''}")
-    n_candles = st.slider("Velas H4", 30, 90, 60)
-    z_period  = st.slider("Periodo Z-Diff", 10, 30, 14)
-    mc_sims   = st.selectbox("Simulaciones MC", [1000,3000,5000], index=1)
-    threshold = st.selectbox("Umbral alerta %", [60,65,70], index=1)
-
-    st.divider()
-    st.markdown("#### Gestión de riesgo")
-    account  = st.number_input("Capital ($)", value=10000, step=500)
-    risk_pct = st.slider("Riesgo %", 0.5, 10.0, 2.0, 0.5)
-    instr    = st.selectbox("Instrumento",
-        ["Forex std (100k)","Forex mini (10k)","XAU/USD","Índice CFD"])
-
-    st.divider()
-    col_l, col_r = st.columns(2)
-    load_btn = col_l.button("📡 Cargar H4", use_container_width=True, type="primary")
-    run_btn  = col_r.button("▶ Ejecutar",   use_container_width=True,
-                             disabled=st.session_state.df is None)
-    macro_btn= st.button("🌐 Cargar Macro FRED", use_container_width=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  LOAD DATA
-# ══════════════════════════════════════════════════════════════════════════════
-if load_btn and ticker:
-    with st.spinner(f"Descargando velas H4 — {ticker}..."):
-        try:
-            raw = yf.download(ticker, period="60d", interval="4h",
-                               auto_adjust=True, progress=False)
-            if raw.empty:
-                st.error(f"Sin datos para '{ticker}'")
-            else:
-                if isinstance(raw.columns, pd.MultiIndex):
-                    raw.columns = raw.columns.get_level_values(0)
-                df = raw.tail(n_candles).copy()
-                df.index = pd.to_datetime(df.index)
-                df = calc_order_flow(df, z_period)
-                st.session_state.df = df
-                st.session_state.results = None
-                p=float(df["Close"].iloc[-1]); d=1 if p>1000 else 2 if p>100 else 5
-                st.sidebar.success(f"✓ {len(df)} velas · {p:.{d}f}")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-if macro_btn:
-    with st.spinner("Cargando datos FRED (tipos, inflación, curva)..."):
-        st.session_state.macro_data = load_macro_data()
-        n = len(st.session_state.macro_data)
-        st.sidebar.success(f"✓ {n} series FRED cargadas")
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  RUN MODEL
-# ══════════════════════════════════════════════════════════════════════════════
-if run_btn and st.session_state.df is not None:
-    df    = st.session_state.df
-    price = float(df["Close"].iloc[-1])
-    rets  = np.diff(np.log(df["Close"].values.astype(float)))
-
-    with st.spinner("Ejecutando modelos cuantitativos..."):
-        last_z    = float(df["z_diff"].iloc[-1])
-        z_adj     = float(np.clip(last_z,-2,2))
-        mc_steps  = horizon * H4_PER_DAY
-        zdiff_ctx = interpret_zdiff(last_z, df)
-        mc_paths  = run_mc(price, rets, mc_sims, mc_steps, z_adj)
-        markov    = calc_markov(df)
-        vol_data  = calc_volatility(df)
-        vp        = calc_volume_profile(df)
-        vwap_s    = calc_vwap(df)
-        delta_s   = calc_volume_delta(df)
-        df_anom   = calc_volume_anomalies(df)
-
-        final     = mc_paths[:,-1]
-        adj_bull  = float(np.clip(np.mean(final>price)*100, 10, 90))
-        adj_bear  = 100 - adj_bull
-
-        st.session_state.results = dict(
-            price=price, last_z=last_z, last_rmf=float(df["rmf"].iloc[-1]),
-            adj_bull=adj_bull, adj_bear=adj_bear,
-            mc_paths=mc_paths, final=final,
-            zdiff_ctx=zdiff_ctx, markov=markov, vol_data=vol_data,
-            p5=float(np.percentile(final,5)),   p95=float(np.percentile(final,95)),
-            p20=float(np.percentile(final,20)), p80=float(np.percentile(final,80)),
-            p8=float(np.percentile(final,8)),   p92=float(np.percentile(final,92)),
-            vol_profile=vp, vwap_series=vwap_s,
-            delta_series=delta_s, df_anom=df_anom,
-        )
-        st.session_state.ai_analysis = None
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  HEADER
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown(f"""<div style='display:flex;align-items:baseline;gap:12px;margin-bottom:8px'>
-  <span style='font-family:Rajdhani,sans-serif;font-size:32px;font-weight:700;
-    color:{CYAN};letter-spacing:3px'>Quant<span style='color:{YELLOW}'>Edge</span> PRO</span>
-  <span style='font-size:11px;color:{MUTED};letter-spacing:2px'>
-    H4 · CUANTITATIVO · FRED MACRO · GEMINI AI</span>
-</div>""", unsafe_allow_html=True)
-
-r = st.session_state.results
-
-if r is None:
-    st.info("👈 Selecciona un activo y pulsa **Cargar H4** → **Ejecutar** para comenzar el análisis.")
-    c1,c2,c3 = st.columns(3)
-    with c1:
-        info_card("DATOS DE MERCADO","Yahoo Finance H4 — futuros continuos disponibles (ES=F, NQ=F, FDAX=F) para datos 23h/día sin gaps de sesión.",CYAN)
-    with c2:
-        info_card("MACRO CUANTITATIVA","Datos FRED (Federal Reserve): tipos reales, curva de tipos, spreads, VIX, condiciones financieras — gratuitos, sin API key.",ORANGE)
-    with c3:
-        info_card("ANÁLISIS IA","Introduce tu Gemini API key (gratuita en Google AI Studio). El análisis combina todos los modelos cuantitativos con contexto macroeconómico.",PURPLE)
-    st.stop()
-
-# KPI bar global
-price = r["price"]; dec=1 if price>1000 else 2 if price>100 else 4
-summ  = build_summary_score(r)
-bc    = summ["verdict_color"]
-mk    = r["markov"]; vdata=r["vol_data"]; zctx=r["zdiff_ctx"]
-nd    = mk["next_day"]
-
 h1,h2,h3,h4,h5,h6 = st.columns(6)
-kpi(h1,"Veredicto",summ["verdict"],f"Score {summ['total']:+.0f}/100 · {summ['conviction']}",bc)
-kpi(h2,"Z-Diff H4",f"{r['last_z']:.3f}",zctx["signal"][:24],zctx["color"])
-kpi(h3,"Precio",f"{price:.{dec}f}",ticker,TEXT)
-kpi(h4,"IC 90% MC",f"{r['p5']:.{dec}f}–{r['p95']:.{dec}f}",f"{horizon}d horizonte",BLUE)
-kpi(h5,"Vol Realizada",f"{vdata['rv_current']*100:.2f}%",vdata["vol_regime"],vdata["vol_color"])
-kpi(h6,"Markov",mk["labels"][int(np.argmax(nd))],f"{max(nd)*100:.0f}% prob. mañana",
-    [RED,YELLOW,GREEN][int(np.argmax(nd))])
+kpi(h1, "Veredicto",          bt,                                       f"MC P={r['adj_bull']:.1f}%", bc)
+kpi(h2, "Z-Diff H4",          f"{r['last_z']:.3f}",                    zctx["label"][:22],            zctx["color"])
+kpi(h3, "Precio actual",      f"{price:.{dec}f}",                       ticker,                        TEXT)
+kpi(h4, f"Rango 90% MC",      f"{r['p5']:.{dec}f} – {r['p95']:.{dec}f}", f"{horizon}d horizonte",    BLUE)
+kpi(h5, "Vol Realizada",      f"{vdata['rv_current']*100:.2f}%",        vdata["vol_regime"],           vdata["vol_color"])
+kpi(h6, "Markov — mañana",
+    mk["labels"][int(np.argmax(mk["next_day"]))],
+    f"{max(mk['next_day'])*100:.0f}% probabilidad",
+    [RED, YELLOW, GREEN][int(np.argmax(mk["next_day"]))])
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 #  TABS
-# ══════════════════════════════════════════════════════════════════════════════
-tab0,tab1,tab2,tab3,tab4,tab5 = st.tabs([
-    "⬡ RESUMEN",
-    "① MERCADO",
-    "② VOLATILIDAD",
-    "③ VOLUMEN",
-    "④ MACRO",
-    "⑤ IA",
+# ═══════════════════════════════════════════════════════════════════════════════
+tab0, tab1, tab2, tab3, tab4 = st.tabs([
+    "⬡ RESUMEN EJECUTIVO",
+    "① DIRECCIONALIDAD — Order Flow · Markov · MC",
+    "② VOLATILIDAD — Cono · ATR · Distribución",
+    "③ VOLUMEN — Perfil · Delta · VWAP · Anomalías",
+    "④ MACRO — Contexto · Eventos · Correlaciones",
 ])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ⬡ RESUMEN EJECUTIVO
-# ─────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
 with tab0:
-    dec=1 if r["price"]>1000 else 2 if r["price"]>100 else 4
-    vc=summ["verdict_color"]
+    ctx_now = st.session_state.context or {}
+    summ    = build_summary(r, ctx_now)
+    dec     = 1 if r["price"]>1000 else 2 if r["price"]>100 else 4
 
-    # Veredicto central
-    st.markdown(f"""<div style='background:{S1};border:2px solid {vc};border-radius:8px;
-        padding:30px 36px;margin-bottom:20px;text-align:center'>
+    # ── VEREDICTO CENTRAL ────────────────────────────────────────────────────
+    vc = summ["verdict_color"]
+    st.markdown(f"""
+    <div style='background:{S1};border:2px solid {vc};border-radius:6px;
+        padding:28px 32px;margin-bottom:20px;text-align:center'>
       <div style='font-size:10px;letter-spacing:4px;color:{MUTED};
-          text-transform:uppercase;margin-bottom:10px;font-family:JetBrains Mono,monospace'>ANÁLISIS CUANTITATIVO — {ticker}</div>
-      <div style='font-family:Rajdhani,sans-serif;font-size:48px;font-weight:700;
-          color:{vc};letter-spacing:3px;line-height:1.1'>{summ["verdict"]}</div>
-      <div style='margin-top:14px;display:flex;justify-content:center;gap:36px;font-size:12px;color:{MUTED}'>
-        <span>Score: <b style='color:{vc};font-size:18px'>{summ["total"]:+.0f}</b><span style='font-size:11px'>/100</span></span>
+          text-transform:uppercase;margin-bottom:8px'>VEREDICTO OPERATIVO</div>
+      <div style='font-family:Rajdhani,sans-serif;font-size:52px;font-weight:700;
+          color:{vc};letter-spacing:4px;line-height:1'>{summ["verdict_icon"]} {summ["verdict"]}</div>
+      <div style='margin-top:12px;display:flex;justify-content:center;gap:32px;
+          font-size:11px;color:{MUTED}'>
+        <span>Score: <b style='color:{vc};font-size:16px'>{summ["total_score"]:+.0f}</b>/100</span>
         <span>Convicción: <b style='color:{summ["conviction_color"]}'>{summ["conviction"]}</b></span>
-        <span><b style='color:{GREEN}'>{summ["bulls"]}</b> alcistas · <b style='color:{RED}'>{summ["bears"]}</b> bajistas · <b style='color:{MUTED}'>{summ["neuts"]}</b> neutras</span>
-        <span>Alineación: <b style='color:{TEXT}'>{summ["align"]*100:.0f}%</b></span>
+        <span>Señales: <b style='color:{GREEN}'>{summ["bullish_sigs"]} alcistas</b> · <b style='color:{RED}'>{summ["bearish_sigs"]} bajistas</b> · <b style='color:{MUTED}'>{summ["neutral_sigs"]} neutrales</b></span>
+        <span>Alineación: <b style='color:{TEXT}'>{summ["alignment"]*100:.0f}%</b></span>
       </div>
-    </div>""", unsafe_allow_html=True)
+    </div>
+    """, unsafe_allow_html=True)
 
-    # Score bar
-    sc=summ["total"]; pp=max(0,sc)/100*100; pn=max(0,-sc)/100*100
-    st.markdown(f"""<div style='margin-bottom:20px'>
-      <div style='display:flex;justify-content:space-between;font-size:9px;color:{MUTED};
-          letter-spacing:2px;text-transform:uppercase;margin-bottom:5px'>
-        <span>BAJISTA −100</span><span>NEUTRAL 0</span><span>+100 ALCISTA</span></div>
-      <div style='position:relative;height:14px;background:{S1};border-radius:7px;
+    # ── SCORE BAR ─────────────────────────────────────────────────────────────
+    sc = summ["total_score"]
+    pct_pos  = max(0, sc) / 100 * 100
+    pct_neg  = max(0, -sc) / 100 * 100
+    bar_html = f"""
+    <div style='margin-bottom:20px'>
+      <div style='display:flex;justify-content:space-between;font-size:9px;
+          color:{MUTED};letter-spacing:2px;text-transform:uppercase;margin-bottom:4px'>
+        <span>BAJISTA −100</span><span>NEUTRAL</span><span>+100 ALCISTA</span>
+      </div>
+      <div style='position:relative;height:12px;background:{S1};border-radius:6px;
           border:1px solid {BORDER};overflow:hidden'>
-        <div style='position:absolute;left:50%;top:0;bottom:0;width:2px;background:{MUTED}'></div>
-        {"<div style='position:absolute;left:50%;top:0;bottom:0;width:"+str(pp/2)+"%;background:"+GREEN+";border-radius:0 4px 4px 0'></div>" if sc>0 else ""}
-        {"<div style='position:absolute;right:50%;top:0;bottom:0;width:"+str(pn/2)+"%;background:"+RED+";border-radius:4px 0 0 4px'></div>" if sc<0 else ""}
-      </div></div>""", unsafe_allow_html=True)
+        <div style='position:absolute;left:50%;top:0;bottom:0;width:2px;
+            background:{MUTED};'></div>
+        {"<div style='position:absolute;left:50%;top:0;bottom:0;width:"+str(pct_pos/2)+"%;background:"+GREEN+";border-radius:0 4px 4px 0'></div>" if sc > 0 else ""}
+        {"<div style='position:absolute;right:50%;top:0;bottom:0;width:"+str(pct_neg/2)+"%;background:"+RED+";border-radius:4px 0 0 4px'></div>" if sc < 0 else ""}
+      </div>
+    </div>"""
+    st.markdown(bar_html, unsafe_allow_html=True)
 
-    # Señales individuales
-    st.markdown("### Modelos Cuantitativos")
+    # ── SEÑALES INDIVIDUALES ─────────────────────────────────────────────────
+    st.markdown("### Señales por Modelo")
     cols = st.columns(len(summ["signals"]))
     for col, sig in zip(cols, summ["signals"]):
-        bw = abs(sig["score"]) / max(sig["peso"],1) * 100
-        bc2= sig["col"] if sig["score"]!=0 else MUTED
-        col.markdown(f"""<div class='kpi' style='border-top:3px solid {sig["col"]}'>
-            <div style='font-size:18px;margin-bottom:6px'>{sig["ico"]}</div>
-            <div class='kpi-lbl'>{sig["cat"]}</div>
-            <div style='font-family:Rajdhani,sans-serif;font-size:18px;font-weight:700;
-                color:{sig["col"]};margin-bottom:4px'>{sig["val"]}</div>
-            <div style='font-size:10px;color:{sig["col"]};margin-bottom:8px'>{sig["lbl"]}</div>
-            <div style='height:3px;background:{BORDER};border-radius:2px;overflow:hidden;margin-bottom:5px'>
-              <div style='height:100%;width:{bw:.0f}%;background:{bc2};border-radius:2px'></div>
+        bar_w = abs(sig["score"]) / sig["peso"] * 100
+        bar_c = sig["color"] if sig["score"] != 0 else MUTED
+        col.markdown(f"""<div class='kpi' style='border-top:3px solid {sig["color"]}'>
+            <div style='font-size:16px;margin-bottom:4px'>{sig["icono"]}</div>
+            <div class='kpi-lbl'>{sig["categoria"]}</div>
+            <div style='font-family:Rajdhani,sans-serif;font-size:20px;font-weight:700;
+                color:{sig["color"]};line-height:1.2;margin-bottom:4px'>{sig["valor"]}</div>
+            <div style='font-size:10px;color:{sig["color"]};margin-bottom:8px'>{sig["label"]}</div>
+            <div style='height:4px;background:{BORDER};border-radius:2px;overflow:hidden;margin-bottom:6px'>
+              <div style='height:100%;width:{bar_w:.0f}%;background:{bar_c};border-radius:2px'></div>
             </div>
-            <div style='font-size:9px;color:{MUTED}'>
-              <b style='color:{sig["col"]}'>{sig["score"]:+.1f}</b> pts · peso {sig["peso"]}
+            <div style='font-size:9px;color:{MUTED}'>Aporte: <b style='color:{sig["color"]}'>{sig["score"]:+.1f}</b> / peso {sig["peso"]}</div>
+        </div>""", unsafe_allow_html=True)
+
+    # Detalles expandibles
+    with st.expander("📋 Ver razonamiento detallado de cada señal"):
+        for sig in summ["signals"]:
+            st.markdown(f"""<div style='padding:10px 14px;margin-bottom:6px;
+                background:{S0};border-left:3px solid {sig["color"]};border-radius:3px'>
+                <b style='color:{sig["color"]}'>{sig["icono"]} {sig["categoria"]}</b>
+                <span style='color:{MUTED};font-size:11px;margin-left:8px'>Score: {sig["score"]:+.1f}</span><br>
+                <span style='font-size:12px;color:{TEXT}'>{sig["detalle"]}</span>
+            </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── ZONAS CLAVE DE VOLUMEN ────────────────────────────────────────────────
+    st.markdown("### Zonas Clave de Volumen")
+    price_now = r["price"]
+
+    # Visual de niveles
+    zones    = summ["key_zones"]
+    all_levs = [z["nivel"] for z in zones] + [price_now]
+    mn_z, mx_z = min(all_levs), max(all_levs)
+    span_z   = mx_z - mn_z if mx_z != mn_z else 1e-10
+
+    zone_html = f"""<div style='background:{S0};border:1px solid {BORDER};
+        border-radius:4px;padding:16px 20px;margin-bottom:14px'>
+      <div style='font-size:9px;letter-spacing:3px;color:{MUTED};
+          text-transform:uppercase;margin-bottom:14px'>MAPA DE NIVELES — arriba = precio más alto</div>"""
+
+    # Sort all levels descending and render
+    all_items = [(z["nivel"], z["tipo"], z["color"], z["desc"]) for z in zones]
+    all_items.append((price_now, "PRECIO ACTUAL", TEXT, "Último cierre H4"))
+    all_items.sort(key=lambda x: x[0], reverse=True)
+
+    for nivel, tipo, color, desc in all_items:
+        pct   = (nivel - mn_z) / span_z * 80 + 10  # 10-90%
+        is_price = tipo == "PRECIO ACTUAL"
+        dist_pct = (price_now - nivel) / price_now * 100 if not is_price else 0
+        dist_str = f"{'▲' if dist_pct>0 else '▼'} {abs(dist_pct):.3f}%" if not is_price else "← AQUÍ"
+
+        zone_html += f"""
+        <div style='display:flex;align-items:center;gap:12px;
+            padding:{'10px 12px' if is_price else '7px 12px'};margin-bottom:4px;
+            background:{'rgba(255,255,255,0.04)' if is_price else 'transparent'};
+            border-radius:3px;{"border:1px solid "+color+";" if is_price else ""}'>
+          <div style='width:70px;font-family:Rajdhani,sans-serif;font-size:{'16px' if is_price else '13px'};
+              font-weight:700;color:{color};text-align:right'>{nivel:.{dec}f}</div>
+          <div style='flex:1;position:relative;height:6px;background:{BORDER};border-radius:3px'>
+            <div style='position:absolute;left:{100-(nivel-mn_z)/span_z*100:.0f}%;top:-3px;
+                width:{'10px' if is_price else '6px'};height:{'12px' if is_price else '8px'};
+                background:{color};border-radius:2px;transform:translateX(-50%)'></div>
+          </div>
+          <div style='width:80px;font-size:10px;color:{color};
+              font-weight:{"700" if is_price else "400"};letter-spacing:1px'>{tipo}</div>
+          <div style='width:80px;font-size:10px;color:{MUTED};text-align:right'>{dist_str}</div>
+          <div style='font-size:10px;color:{MUTED};flex:2'>{desc}</div>
+        </div>"""
+
+    zone_html += "</div>"
+    st.markdown(zone_html, unsafe_allow_html=True)
+
+    # Interpretación de zonas
+    poc, vah, val_v, vwap_now = summ["poc"], summ["vah"], summ["val"], summ["vwap"]
+    zk1, zk2 = st.columns(2)
+    with zk1:
+        # Zona de interés más cercana
+        distances = {
+            "POC":  abs(price_now - poc),
+            "VAH":  abs(price_now - vah),
+            "VAL":  abs(price_now - val_v),
+            "VWAP": abs(price_now - vwap_now),
+        }
+        nearest   = min(distances, key=distances.get)
+        nearest_d = distances[nearest] / price_now * 100
+        nearest_v = {"POC":poc,"VAH":vah,"VAL":val_v,"VWAP":vwap_now}[nearest]
+        n_color   = {"POC":ORANGE,"VAH":BLUE,"VAL":BLUE,"VWAP":YELLOW}[nearest]
+
+        st.markdown(f"""<div class='entry-box' style='border-left-color:{n_color}'>
+            <div style='font-size:9px;letter-spacing:3px;color:{n_color};
+                text-transform:uppercase;margin-bottom:8px'>📍 ZONA MÁS CERCANA</div>
+            <div style='font-family:Rajdhani,sans-serif;font-size:24px;font-weight:700;
+                color:{n_color};margin-bottom:6px'>{nearest} {nearest_v:.{dec}f}</div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.8'>
+            A <b>{nearest_d:.3f}%</b> del precio actual ({price_now:.{dec}f}).<br>
+            {"El POC actúa como imán — el precio tiende a volver a él. Zona de alta probabilidad de reacción." if nearest=="POC" else
+             "VAH es resistencia clave del Value Area. Ruptura con volumen = alcista confirmado." if nearest=="VAH" else
+             "VAL es soporte clave del Value Area. Ruptura con volumen = bajista confirmado." if nearest=="VAL" else
+             "VWAP es el nivel de referencia institucional. Por encima = largo, por debajo = corto."}
             </div>
+        </div>""", unsafe_allow_html=True)
+
+    with zk2:
+        # Estructura de precio en el mapa de zonas
+        in_va = val_v <= price_now <= vah
+        if price_now > vah:
+            zona_txt = f"Precio <b style='color:{GREEN}'>por encima del Value Area</b> (VAH {vah:.{dec}f}). Compradores en control. El VAH se convierte en soporte. Próxima resistencia: máximos del período."
+            zona_col = GREEN
+        elif price_now < val_v:
+            zona_txt = f"Precio <b style='color:{RED}'>por debajo del Value Area</b> (VAL {val_v:.{dec}f}). Vendedores en control. El VAL se convierte en resistencia. Próximo soporte: mínimos del período."
+            zona_col = RED
+        elif price_now > poc:
+            zona_txt = f"Precio <b style='color:'#69f0ae''>en el Value Area, sobre el POC</b> ({poc:.{dec}f}). Zona de equilibrio con ligero sesgo alcista. El POC ({poc:.{dec}f}) actúa como soporte inmediato."
+            zona_col = "#69f0ae"
+        else:
+            zona_txt = f"Precio <b style='color:#ff6b6b'>en el Value Area, bajo el POC</b> ({poc:.{dec}f}). Zona de equilibrio con ligero sesgo bajista. El POC ({poc:.{dec}f}) actúa como resistencia inmediata."
+            zona_col = "#ff6b6b"
+
+        st.markdown(f"""<div class='entry-box' style='border-left-color:{zona_col}'>
+            <div style='font-size:9px;letter-spacing:3px;color:{zona_col};
+                text-transform:uppercase;margin-bottom:8px'>🗺️ ESTRUCTURA DE PRECIO</div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.8'>{zona_txt}</div>
         </div>""", unsafe_allow_html=True)
 
     st.divider()
 
-    # Zonas clave de volumen
-    st.markdown("### Zonas Clave de Volumen")
-    price_now = r["price"]
-    vp        = r["vol_profile"]
-    vwap_now  = float(r["vwap_series"].iloc[-1])
-    poc,vah,val_v = summ["poc"],summ["vah"],summ["val"]
+    # ── CHECKLIST OPERATIVA ───────────────────────────────────────────────────
+    st.markdown("### ✅ Checklist Operativa")
 
-    zones = [
-        (vah,      "VAH",         BLUE,   "Techo del 70% del volumen — resistencia"),
-        (poc,      "POC",         ORANGE, "Mayor volumen negociado — imán de precio"),
-        (vwap_now, "VWAP",        YELLOW, "Precio medio ponderado — referencia institucional"),
-        (val_v,    "VAL",         BLUE,   "Suelo del 70% del volumen — soporte"),
-    ]
-    all_items = zones + [(price_now,"PRECIO",TEXT,"Último cierre H4")]
-    all_items.sort(key=lambda x: x[0], reverse=True)
-    mn_z,mx_z = min(x[0] for x in all_items), max(x[0] for x in all_items)
-    span_z    = mx_z-mn_z if mx_z!=mn_z else 1e-10
-
-    z_html = f"<div style='background:{S0};border:1px solid {BORDER};border-radius:6px;padding:16px 20px;margin-bottom:12px'>"
-    z_html += f"<div style='font-size:9px;letter-spacing:3px;color:{MUTED};text-transform:uppercase;margin-bottom:12px;font-family:JetBrains Mono,monospace'>MAPA DE NIVELES — precio más alto arriba</div>"
-    for nivel,tipo,color,desc in all_items:
-        is_p = tipo=="PRECIO"
-        dist = (price_now-nivel)/price_now*100 if not is_p else 0
-        ds   = f"{'▲' if dist>0 else '▼'} {abs(dist):.3f}%" if not is_p else "◀ AQUÍ"
-        z_html += f"""<div style='display:flex;align-items:center;gap:12px;padding:{'10px 12px' if is_p else '7px 12px'};
-            margin-bottom:3px;background:{'rgba(255,255,255,0.04)' if is_p else 'transparent'};
-            border-radius:4px;{"border:1px solid "+color+";" if is_p else ""}'>
-          <div style='width:72px;font-family:JetBrains Mono,monospace;font-size:{'14px' if is_p else '12px'};
-              font-weight:{"700" if is_p else "400"};color:{color};text-align:right'>{nivel:.{dec}f}</div>
-          <div style='flex:1;position:relative;height:5px;background:{BORDER};border-radius:3px'>
-            <div style='position:absolute;left:{100-(nivel-mn_z)/span_z*100:.0f}%;top:-4px;
-                width:{'10px' if is_p else '6px'};height:{'13px' if is_p else '8px'};
-                background:{color};border-radius:2px;transform:translateX(-50%)'></div>
-          </div>
-          <div style='width:72px;font-size:10px;color:{color};font-weight:{"700" if is_p else "400"};letter-spacing:1px'>{tipo}</div>
-          <div style='width:80px;font-size:10px;color:{MUTED};text-align:right'>{ds}</div>
-          <div style='font-size:10px;color:{MUTED};flex:2'>{desc}</div>
-        </div>"""
-    z_html += "</div>"
-    st.markdown(z_html, unsafe_allow_html=True)
-
-    zk1,zk2 = st.columns(2)
-    distances = {"POC":abs(price_now-poc),"VAH":abs(price_now-vah),"VAL":abs(price_now-val_v),"VWAP":abs(price_now-vwap_now)}
-    nearest   = min(distances, key=distances.get)
-    nv        = {"POC":poc,"VAH":vah,"VAL":val_v,"VWAP":vwap_now}[nearest]
-    nc        = {"POC":ORANGE,"VAH":BLUE,"VAL":BLUE,"VWAP":YELLOW}[nearest]
-    with zk1:
-        info_card("📍 ZONA MÁS CERCANA",
-            f"<b style='color:{nc};font-size:20px'>{nearest} {nv:.{dec}f}</b><br>"
-            f"A <b>{distances[nearest]/price_now*100:.3f}%</b> del precio actual. "
-            f"{'Imán de precio — alta probabilidad de reacción.' if nearest=='POC' else 'Resistencia clave del Value Area.' if nearest=='VAH' else 'Soporte clave del Value Area.' if nearest=='VAL' else 'Referencia institucional — precio equilibrado.'}", nc)
-    with zk2:
-        in_va = val_v<=price_now<=vah
-        if price_now>vah:
-            zt=f"Precio sobre VAH ({vah:.{dec}f}). Compradores en control. VAH es ahora soporte."; zc=GREEN
-        elif price_now<val_v:
-            zt=f"Precio bajo VAL ({val_v:.{dec}f}). Vendedores en control. VAL es ahora resistencia."; zc=RED
-        elif price_now>poc:
-            zt=f"En Value Area sobre POC ({poc:.{dec}f}). Equilibrio con sesgo alcista. POC es soporte inmediato."; zc="#69f0ae"
-        else:
-            zt=f"En Value Area bajo POC ({poc:.{dec}f}). Equilibrio con sesgo bajista. POC es resistencia inmediata."; zc="#ff6b6b"
-        info_card("🗺️ ESTRUCTURA DE PRECIO", zt, zc)
-
-    st.divider()
-
-    # Checklist operativa
-    st.markdown("### Checklist de Condiciones")
-    rr_val = summ.get("real_rates",{}).get("real_rate_approx", None)
     checks = [
-        (abs(summ["total"])>=40,        f"Score ≥ 40 (actual: {summ['total']:+.0f})",       "Señal de fuerza direccional suficiente"),
-        (summ["conviction"] in("ALTA","MEDIA"), f"Convicción {summ['conviction']}",         "Mínimo 50% de modelos alineados"),
-        (abs(r["last_z"])>=1.5,         f"Z-Diff fuera de neutral ({r['last_z']:.3f})",     "Flujo institucional confirmado"),
-        (max(r["adj_bull"],r["adj_bear"])>=60, f"MC ≥ 60% ({max(r['adj_bull'],r['adj_bear']):.1f}%)", "Probabilidad estadística suficiente"),
-        (vdata["vol_regime"]!="COMPRESIÓN", f"Régimen: {vdata['vol_regime']}",              "Compresión = esperar ruptura antes de entrar"),
-        (not (val_v<=price_now<=vah) or abs(price_now-poc)/price_now*100>0.15,
-             f"Precio fuera del POC ({poc:.{dec}f})",                                       "En el POC el R:R es peor — zona de equilibrio"),
-        (rr_val is None or rr_val>-1,   f"Tipos reales {'N/A (sin datos FRED)' if rr_val is None else f'{rr_val:+.1f}%'}", "Tipos muy negativos = entorno inflacionario distorsionado"),
+        (abs(summ["total_score"]) >= 40,
+         f"Score total ≥ 40 ({summ['total_score']:+.0f})",
+         "Señal de suficiente fuerza direccional"),
+        (summ["conviction"] in ("ALTA","MEDIA"),
+         f"Convicción {summ['conviction']}",
+         "Al menos 50% de señales alineadas"),
+        (abs(r["last_z"]) >= 1.5,
+         f"Z-Diff fuera de zona neutral ({r['last_z']:.3f})",
+         "Flujo institucional confirmado"),
+        (max(r["adj_bull"], r["adj_bear"]) >= 60,
+         f"Monte Carlo ≥ 60% ({max(r['adj_bull'],r['adj_bear']):.1f}%)",
+         "Probabilidad estadística suficiente"),
+        (summ["vol_regime"] != "COMPRESIÓN",
+         f"Régimen de volatilidad: {summ['vol_regime']}",
+         "No operar en compresión sin ruptura confirmada"),
+        (not in_va or abs(price_now - poc) / price_now * 100 > 0.1,
+         f"Precio alejado del POC ({poc:.{dec}f})",
+         "POC es zona de equilibrio, peor ratio R:R"),
+        (ctx_now.get("macro", 0) != 0 or ctx_now.get("news", 0) != 0,
+         "Contexto macro cargado",
+         "Añade contexto en Tab ④ para señal más precisa"),
     ]
-    for ok,title,detail in checks:
-        col_c=GREEN if ok else RED
-        st.markdown(f"""<div style='display:flex;align-items:center;gap:12px;padding:9px 16px;
-            margin-bottom:4px;background:{S0};border-left:3px solid {col_c};border-radius:4px'>
-            <span style='font-size:16px'>{"✅" if ok else "❌"}</span>
+
+    for ok, title, detail in checks:
+        icon  = "✅" if ok else "❌"
+        color = GREEN if ok else RED
+        st.markdown(f"""<div style='display:flex;align-items:center;gap:12px;
+            padding:8px 14px;margin-bottom:4px;background:{S0};
+            border-left:3px solid {color};border-radius:3px'>
+            <span style='font-size:16px'>{icon}</span>
             <div>
                 <div style='font-size:12px;color:{TEXT};font-weight:500'>{title}</div>
                 <div style='font-size:10px;color:{MUTED}'>{detail}</div>
             </div>
         </div>""", unsafe_allow_html=True)
-    ok_n = sum(1 for ok,_,_ in checks if ok)
-    msg  = "Condiciones favorables" if ok_n>=5 else "Condiciones parciales" if ok_n>=3 else "Condiciones insuficientes"
-    mc2  = GREEN if ok_n>=5 else ORANGE if ok_n>=3 else RED
-    st.markdown(f"<div style='text-align:center;margin-top:10px;font-size:12px;color:{mc2}'><b>{ok_n}/{len(checks)} criterios — {msg}</b></div>",unsafe_allow_html=True)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ① MERCADO
-# ─────────────────────────────────────────────────────────────────────────────
-with tab1:
-    df = st.session_state.df
-    st.markdown(f"#### {ticker} H4 — Monte Carlo {r['mc_paths'].shape[0]:,} sims · {r['mc_paths'].shape[1]} pasos · Histograma integrado")
-    fig_m, bull_pct = chart_price_mc(df, r["mc_paths"])
-    st.plotly_chart(fig_m, use_container_width=True)
-
-    cz,ce = st.columns(2)
-    with cz:
-        info_card(f"⚡ Z-DIFF ORDER FLOW — {zctx['signal']}",
-            f"Z = <b style='color:{zctx['color']}'>{r['last_z']:.3f}</b> · "
-            f"Precio en <b>{zctx['price_pct']*100:.0f}%</b> del rango · "
-            f"{'↑ subiendo' if zctx['rising'] else '↓ cayendo'}"
-            f"{'<br>💥 <b>Ruptura alcista activa</b>' if zctx['breaking_up'] else ''}"
-            f"{'<br>💥 <b>Ruptura bajista activa</b>' if zctx['breaking_down'] else ''}",
-            zctx["color"])
-    with ce:
-        info_card("🎲 MONTE CARLO GBM",
-            f"P(alcista): <b style='color:{GREEN if r['adj_bull']>=60 else RED}'>{r['adj_bull']:.1f}%</b> · "
-            f"P(bajista): <b style='color:{RED if r['adj_bear']>=60 else GREEN}'>{r['adj_bear']:.1f}%</b><br>"
-            f"IC 90%: [{r['p5']:.{dec}f} – {r['p95']:.{dec}f}]<br>"
-            f"Media MC: <b>{float(r['final'].mean()):.{dec}f}</b> · "
-            f"Mediana: <b>{float(np.median(r['final'])):.{dec}f}</b>", CYAN)
-
-    st.divider()
-    st.markdown("#### 🔗 Cadenas de Markov — Probabilidades de Transición de Estado")
-    T      = mk["transition"]; labels=mk["labels"]
-    fig_mk = make_subplots(rows=1,cols=2,subplot_titles=["Matriz de Transición","P(Estado) mañana"],horizontal_spacing=0.14)
-    fig_mk.add_trace(go.Heatmap(z=T*100,x=labels,y=labels,
-        colorscale=[[0,BG],[0.5,"rgba(0,144,255,.4)"],[1,CYAN]],
-        text=[[f"{v:.0f}%" for v in row] for row in T*100],
-        texttemplate="%{text}",showscale=False),row=1,col=1)
-    fig_mk.add_trace(go.Bar(x=labels,y=nd*100,marker_color=[RED,YELLOW,GREEN],
-        text=[f"{v*100:.1f}%" for v in nd],textposition="outside",showlegend=False),row=1,col=2)
-    fig_mk.update_layout(template="plotly_dark",paper_bgcolor=BG,plot_bgcolor=S1,
-        height=320,margin=dict(l=8,r=8,t=40,b=8))
-    st.plotly_chart(fig_mk, use_container_width=True)
-
-    m1,m2,m3 = st.columns(3)
-    for col,lbl,val,clr in zip([m1,m2,m3],mk["labels"],nd,[RED,YELLOW,GREEN]):
-        kpi(col,f"P({lbl})",f"{val*100:.1f}%",f"Estado actual: {mk['current_label']}",clr)
-
-    st.divider()
-    st.markdown("#### 📊 Niveles MC + Calculadora de Posición")
-    pc1,pc2,pc3,pc4 = st.columns(4)
-    kpi(pc1,f"P(positivo {horizon}d)",f"{r['adj_bull']:.1f}%","Monte Carlo GBM",GREEN)
-    kpi(pc2,f"P(negativo {horizon}d)",f"{r['adj_bear']:.1f}%","Monte Carlo GBM",RED)
-    kpi(pc3,"Media MC",f"{float(r['final'].mean()):.{dec}f}",f"mediana {float(np.median(r['final'])):.{dec}f}",CYAN)
-    kpi(pc4,"Dispersión 1σ",f"±{float(r['final'].std()):.{dec}f}",f"IC 90%: {r['p5']:.{dec}f}–{r['p95']:.{dec}f}",ORANGE)
-
-    prob     = r["adj_bull"] if r["adj_bull"]>r["adj_bear"] else r["adj_bear"]
-    prim_bull= r["adj_bull"]>r["adj_bear"]
-    sl_      = r["p8"]  if prim_bull else r["p92"]
-    tp_      = r["p80"] if prim_bull else r["p20"]
-    en_      = float(r["final"].mean()) if zctx.get("pattern","") in ["ruptura_momentum","ruptura_confirmada"] else (r["p80"] if prim_bull else r["p20"])
-    rr_ratio = abs(tp_-en_)/max(abs(en_-sl_),1e-10)
-    risk_usd = account*(risk_pct/100)
-    sl_dist  = abs(en_-sl_)
-    if instr=="Forex std (100k)":   lots=risk_usd/((sl_dist/0.0001)*10); ll=f"{lots:.2f} lotes std"
-    elif instr=="Forex mini (10k)": lots=risk_usd/((sl_dist/0.0001)*1);  ll=f"{lots:.2f} mini lotes"
-    elif instr=="XAU/USD":          lots=risk_usd/(sl_dist*100);          ll=f"{lots:.3f} lotes XAU"
-    else:                           lots=risk_usd/max(sl_dist,1e-10);     ll=f"{lots:.2f} contratos"
-    sc_ = GREEN if prim_bull else RED
-    st.markdown(f"""<div class='card'>
-        <div style='display:grid;grid-template-columns:repeat(5,1fr);gap:16px;align-items:center'>
-          <div style='text-align:center;padding:12px;background:{"rgba(0,230,118,.08)" if prim_bull else "rgba(255,23,68,.08)"};
-              border:1px solid {sc_};border-radius:6px'>
-            <div style='font-family:Rajdhani,sans-serif;font-size:22px;font-weight:700;color:{sc_}'>{"LARGO" if prim_bull else "CORTO"}</div>
-            <div style='font-size:11px;color:{sc_}'>{"BUY STOP/LIMIT" if prim_bull else "SELL STOP/LIMIT"}</div>
-          </div>
-          <div>
-            <div style='font-family:Rajdhani,sans-serif;font-size:24px;font-weight:700'>{en_:.{dec}f}</div>
-            <div style='font-size:10px;color:{MUTED}'>nivel de entrada</div>
-          </div>
-          <div style='font-size:12px;line-height:2'>
-            SL <span style='color:{RED};font-weight:600'>{sl_:.{dec}f}</span><br>
-            TP <span style='color:{GREEN};font-weight:600'>{tp_:.{dec}f}</span><br>
-            RR <span>1:{rr_ratio:.1f}</span>
-          </div>
-          <div style='font-size:11px;color:{MUTED};line-height:1.7'>
-            {ll}<br>Riesgo <span style='color:{RED}'>${risk_usd:.0f}</span><br>
-            Potencial <span style='color:{GREEN}'>${risk_usd*rr_ratio:.0f}</span>
-          </div>
-          <div style='text-align:right'>
-            <div style='font-family:Rajdhani,sans-serif;font-size:36px;font-weight:700;color:{sc_}'>{prob:.1f}%</div>
-            <div style='font-size:10px;color:{MUTED}'>probabilidad MC</div>
-          </div>
-        </div>
-        <div style='font-size:10px;color:{MUTED};margin-top:10px;padding-top:10px;border-top:1px solid {BORDER}'>
-            Niveles derivados de percentiles de la distribución Monte Carlo (p8/p80 largo · p92/p20 corto).
-            Estos no son consejos de inversión — úsalos como referencia estadística.
-        </div>
+    ok_count = sum(1 for ok, _, _ in checks if ok)
+    st.markdown(f"""<div style='text-align:center;margin-top:12px;font-size:11px;color:{MUTED}'>
+        {ok_count}/{len(checks)} criterios cumplidos
+        {"— <b style='color:"+GREEN+"'>Condiciones favorables para operar</b>" if ok_count >= 5
+         else "— <b style='color:"+ORANGE+"'>Condiciones parciales — reduce tamaño</b>" if ok_count >= 3
+         else "— <b style='color:"+RED+"'>Condiciones insuficientes — no operar</b>"}
     </div>""", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ② VOLATILIDAD
+with tab1:
+    df  = st.session_state.df
+
+    st.markdown(f"#### 📈 {ticker} H4 — Monte Carlo ({r['mc_paths'].shape[0]:,} sims, {r['mc_paths'].shape[1]} pasos) + Histograma de Probabilidad")
+    fig_main, bull_pct = fig_price_with_mc(df, r["mc_paths"])
+    st.plotly_chart(fig_main, use_container_width=True)
+
+    # Z-Diff card + Entry card
+    cz, ce = st.columns(2)
+    with cz:
+        st.markdown(f"""<div class='signal-box' style='border:1px solid {zctx["color"]};
+            border-left:4px solid {zctx["color"]};background:{S1}'>
+            <div style='font-family:Rajdhani,sans-serif;font-size:18px;font-weight:700;
+                color:{zctx["color"]};letter-spacing:2px;margin-bottom:6px'>{zctx["signal"]}</div>
+            <div style='font-size:10px;color:{MUTED};margin-bottom:8px'>
+                Z: <b style='color:{zctx["color"]}'>{r["last_z"]:.3f}</b> &nbsp;·&nbsp;
+                Precio: <b>{'↑ subiendo' if zctx['rising'] else '↓ cayendo'}</b> &nbsp;·&nbsp;
+                Rango: <b>{zctx['price_pct']*100:.0f}%</b>
+                {'&nbsp;·&nbsp; <span style="color:#ff9100">⚠ ZONA EXTREMA</span>' if zctx["extreme"] else ""}
+                {'&nbsp;·&nbsp; <span style="color:#00e676">💥 RUPTURA ALCISTA</span>' if zctx["breaking_up"] else ""}
+                {'&nbsp;·&nbsp; <span style="color:#ff1744">💥 RUPTURA BAJISTA</span>' if zctx["breaking_down"] else ""}
+            </div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.7'>{zctx["expl"]}</div>
+        </div>""", unsafe_allow_html=True)
+    with ce:
+        st.markdown(f"""<div class='entry-box'>
+            <div style='font-size:9px;letter-spacing:3px;color:{CYAN};
+                text-transform:uppercase;margin-bottom:8px'>🔍 DIAGNÓSTICO DE ENTRADA</div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.8'>{zctx["entry_reason"]}</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
+    # Markov
+    st.markdown("#### 🔗 Cadenas de Markov — Matriz de Transición de Estados")
+    st.plotly_chart(fig_markov(mk), use_container_width=True)
+    mc1,mc2,mc3 = st.columns(3)
+    for col, lbl, val, clr in zip([mc1,mc2,mc3], mk["labels"], mk["next_day"],
+                                   [RED, YELLOW, GREEN]):
+        kpi(col, f"P({lbl}) mañana", f"{val*100:.1f}%",
+            f"Estado actual: {mk['current_label']}", clr)
+
+    st.divider()
+
+    # MC Summary + Order
+    st.markdown("#### 📊 Probabilidades MC + Orden Recomendada")
+    pc1,pc2,pc3,pc4 = st.columns(4)
+    kpi(pc1, f"P(positivo {horizon}d)", f"{r['adj_bull']:.1f}%", "Monte Carlo GBM", GREEN)
+    kpi(pc2, f"P(negativo {horizon}d)", f"{r['adj_bear']:.1f}%", "Monte Carlo GBM", RED)
+    kpi(pc3, "Media MC",   f"{float(r['final'].mean()):.{dec}f}",
+        f"mediana {float(np.median(r['final'])):.{dec}f}", CYAN)
+    kpi(pc4, "Dispersión 1σ", f"±{float(r['final'].std()):.{dec}f}",
+        f"90%: {r['p5']:.{dec}f}–{r['p95']:.{dec}f}", ORANGE)
+
+    prob      = r["adj_bull"] if r["adj_bull"] > r["adj_bear"] else r["adj_bear"]
+    prim_bull = r["adj_bull"] > r["adj_bear"]
+
+    if prob < threshold or zctx["bull"] is None:
+        st.markdown(f"""<div class='signal-box' style='border:1px solid rgba(255,214,0,.3);
+            background:rgba(255,214,0,.04)'>
+            <div style='font-family:Rajdhani,sans-serif;font-size:22px;font-weight:700;
+                color:{YELLOW};letter-spacing:3px;margin-bottom:6px'>⚠ NO OPERAR</div>
+            <div style='font-size:12px;color:{MUTED};line-height:1.9'>
+                P={prob:.1f}% — por debajo del umbral {threshold}% &nbsp;·&nbsp;
+                Z={r["last_z"]:.3f} — {zctx["signal"]}<br>
+                <span style='color:{YELLOW}'>💡 Preservar capital es una posición válida.</span>
+            </div>
+        </div>""", unsafe_allow_html=True)
+    else:
+        side  = "BUY"  if prim_bull else "SELL"
+        sc_   = GREEN  if prim_bull else RED
+        sl_   = r["p8"]  if prim_bull else r["p92"]
+        tp_   = r["p80"] if prim_bull else r["p20"]
+        en_   = r["p80"] if prim_bull else r["p20"]
+        # entry: if STOP pattern use breakout, else use limit level
+        if zctx["pattern"] in ["ruptura_momentum","ruptura_confirmada","momentum_moderado"]:
+            en_ = float(r["final"].mean())   # around expected price
+            otype = "STOP"
+        else:
+            otype = "LIMIT"
+
+        rr_   = abs(tp_-en_) / max(abs(en_-sl_), 1e-10)
+        risk_usd = account*(risk_pct/100)
+        sl_dist  = abs(en_-sl_)
+        if instr=="Forex std (100k)":   lots=risk_usd/((sl_dist/0.0001)*10); ll=f"{lots:.2f} lotes std"
+        elif instr=="Forex mini (10k)": lots=risk_usd/((sl_dist/0.0001)*1);  ll=f"{lots:.2f} mini lotes"
+        elif instr=="XAU/USD":          lots=risk_usd/(sl_dist*100);          ll=f"{lots:.3f} lotes XAU"
+        else:                           lots=risk_usd/max(sl_dist,1e-10);     ll=f"{lots:.2f} contratos"
+
+        o1,o2,o3,o4,o5 = st.columns([1,1.4,1.2,2,1])
+        o1.markdown(f"""<div style='text-align:center;padding:12px 6px;
+            background:{"rgba(0,230,118,.1)" if prim_bull else "rgba(255,23,68,.1)"};
+            border:1px solid {sc_};border-radius:4px'>
+            <div style='font-family:Rajdhani,sans-serif;font-size:20px;font-weight:700;color:{sc_}'>{side}</div>
+            <div style='font-size:11px;color:{sc_}'>{otype}</div>
+        </div>""", unsafe_allow_html=True)
+        o2.markdown(f"""<div style='padding:6px 0'>
+            <div style='font-family:Rajdhani,sans-serif;font-size:24px;font-weight:700'>{en_:.{dec}f}</div>
+            <div style='font-size:9px;color:{MUTED}'>entrada GTC · {horizon}d</div>
+        </div>""", unsafe_allow_html=True)
+        o3.markdown(f"""<div style='font-size:12px;line-height:2.1;padding:4px 0'>
+            SL: <span style='color:{RED};font-weight:600'>{sl_:.{dec}f}</span><br>
+            TP: <span style='color:{GREEN};font-weight:600'>{tp_:.{dec}f}</span><br>
+            RR: <span style='color:{TEXT}'>1:{rr_:.1f}</span>
+        </div>""", unsafe_allow_html=True)
+        o4.markdown(f"""<div style='font-size:10px;color:{MUTED};line-height:1.7;padding:4px 0'>
+            {zctx["entry_reason"][:220]}
+        </div>""", unsafe_allow_html=True)
+        o5.markdown(f"""<div style='text-align:right;padding:4px 0'>
+            <div style='font-family:Rajdhani,sans-serif;font-size:28px;font-weight:700;color:{sc_}'>{prob:.1f}%</div>
+            <div style='font-size:10px;color:{MUTED}'>{ll}</div>
+            <div style='font-size:10px;color:{RED}'>Riesgo ${risk_usd:.0f}</div>
+            <div style='font-size:10px;color:{GREEN}'>Pot. ${risk_usd*rr_:.0f}</div>
+        </div>""", unsafe_allow_html=True)
+
 # ─────────────────────────────────────────────────────────────────────────────
 with tab2:
-    vd  = r["vol_data"]; dec=1 if price>1000 else 2 if price>100 else 4
+    vd  = r["vol_data"]
+    dec = 1 if price>1000 else 2 if price>100 else 4
+
     v1,v2,v3,v4,v5,v6 = st.columns(6)
-    kpi(v1,"Vol Realizada (14v)",f"{vd['rv_current']*100:.2f}%","anualizada",ORANGE)
-    kpi(v2,"Vol Parkinson (H-L)",f"{vd['parkinson']*100:.2f}%","estimador H-L",PURPLE)
-    kpi(v3,"Vol Garman-Klass",f"{vd['garman_klass']*100:.2f}%","estimador OHLC",BLUE)
-    kpi(v4,"Régimen",vd["vol_regime"],f"σ corto {vd['rv_short']*100:.1f}% / largo {vd['rv_long']*100:.1f}%",vd["vol_color"])
-    kpi(v5,"Movimiento 1σ/día",f"±{vd['price_1s']:.{dec}f}",f"±{vd['price_1s']/price*100:.3f}%",CYAN)
-    kpi(v6,"Movimiento 2σ/día",f"±{vd['price_2s']:.{dec}f}",f"±{vd['price_2s']/price*100:.3f}%",YELLOW)
+    kpi(v1, "Vol Realizada (14v)",    f"{vd['rv_current']*100:.2f}%",    "anualizada",           ORANGE)
+    kpi(v2, "Vol Parkinson (H-L)",    f"{vd['parkinson']*100:.2f}%",     "estimador H-L",        PURPLE)
+    kpi(v3, "Vol Garman-Klass",       f"{vd['garman_klass']*100:.2f}%",  "estimador OHLC",       BLUE)
+    kpi(v4, "Régimen",                vd["vol_regime"],
+        f"σ corto {vd['rv_short']*100:.1f}% / largo {vd['rv_long']*100:.1f}%", vd["vol_color"])
+    kpi(v5, "Movimiento 1σ (1 día)",  f"±{vd['price_1s']:.{dec}f}",
+        f"±{vd['price_1s']/price*100:.3f}%", CYAN)
+    kpi(v6, "Movimiento 2σ (1 día)",  f"±{vd['price_2s']:.{dec}f}",
+        f"±{vd['price_2s']/price*100:.3f}%", YELLOW)
 
-    st.plotly_chart(chart_volatility(st.session_state.df, vd, r["mc_paths"]), use_container_width=True)
+    st.markdown("#### 📉 Cono de Volatilidad · Vol Realizada · ATR · Distribución de Retornos")
+    st.plotly_chart(fig_volatility(st.session_state.df, vd, r["mc_paths"]),
+                     use_container_width=True)
 
-    st.markdown("#### ATR Multi-Periodo")
-    rows=[]
-    for w,av in vd["atr"].items():
-        rows.append({"Periodo":f"{w}v H4 (~{w//6:.0f}d)","ATR":f"{av:.{dec}f}",
-                     "ATR %":f"{av/price*100:.3f}%","SL 1×ATR":f"{av:.{dec}f}",
-                     "TP 2×ATR":f"{av*2:.{dec}f}","TP 3×ATR":f"{av*3:.{dec}f}"})
+    st.markdown("#### 📏 ATR Multi-Periodo")
+    rows = []
+    for w, av in vd["atr"].items():
+        rows.append({
+            "Periodo":         f"{w} velas H4 (~{w//6:.0f}d)",
+            "ATR absoluto":    f"{av:.{dec}f}",
+            "ATR % precio":    f"{av/price*100:.3f}%",
+            "SL 1× ATR":       f"{av:.{dec}f}",
+            "TP 2× ATR":       f"{av*2:.{dec}f}",
+            "TP 3× ATR":       f"{av*3:.{dec}f}",
+        })
     st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
-    vi1,vi2 = st.columns(2)
+    st.divider()
+    vi1, vi2 = st.columns(2)
     with vi1:
-        reg_txt = ("🔴 <b>EXPANSIÓN</b> — Vol corta >> larga. Movimiento fuerte en curso. Aumenta SL/TP, reduce tamaño."
-                   if vd["vol_regime"]=="EXPANSIÓN" else
-                   "🔵 <b>COMPRESIÓN</b> — Vol corta << larga. Mercado comprimido — ruptura inminente. Espera confirmación."
-                   if vd["vol_regime"]=="COMPRESIÓN" else
-                   "⚪ <b>NORMAL</b> — Régimen estable. Parámetros estándar. Usa ATR como referencia directa.")
-        info_card("RÉGIMEN DE VOLATILIDAD", reg_txt, vd["vol_color"])
+        st.markdown(f"""<div class='entry-box'>
+            <div style='font-size:9px;letter-spacing:3px;color:{ORANGE};
+                text-transform:uppercase;margin-bottom:8px'>RÉGIMEN DE VOLATILIDAD</div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.9'>
+            {"🔴 <b>EXPANSIÓN:</b> Vol corta muy por encima de la larga. Mercado en movimiento fuerte. Aumenta SL/TP y reduce tamaño de posición." if vd["vol_regime"]=="EXPANSIÓN" else
+             "🔵 <b>COMPRESIÓN:</b> Vol corta muy por debajo de la larga. Mercado comprimido — ruptura inminente. Posición pequeña ahora, aumenta tras la ruptura." if vd["vol_regime"]=="COMPRESIÓN" else
+             "⚪ <b>NORMAL:</b> Régimen estable. Parámetros estándar de SL/TP. Usa el ATR como referencia directa."}
+            </div>
+        </div>""", unsafe_allow_html=True)
     with vi2:
-        info_card("NIVELES ESTADÍSTICOS MAÑANA",
-            f"Precio actual: <b>{price:.{dec}f}</b><br>"
-            f"1σ alcista (68%): <b style='color:{GREEN}'>{price+vd['price_1s']:.{dec}f}</b> · "
-            f"1σ bajista: <b style='color:{RED}'>{price-vd['price_1s']:.{dec}f}</b><br>"
-            f"2σ alcista (95%): <b style='color:{GREEN}'>{price+vd['price_2s']:.{dec}f}</b> · "
-            f"2σ bajista: <b style='color:{RED}'>{price-vd['price_2s']:.{dec}f}</b>", CYAN)
+        st.markdown(f"""<div class='entry-box'>
+            <div style='font-size:9px;letter-spacing:3px;color:{CYAN};
+                text-transform:uppercase;margin-bottom:8px'>NIVELES ESTADÍSTICOS MAÑANA</div>
+            <div style='font-size:12px;color:{TEXT};line-height:2.0'>
+            Precio: <b>{price:.{dec}f}</b><br>
+            1σ alcista (68%): <b style='color:{GREEN}'>{price+vd["price_1s"]:.{dec}f}</b>
+            &nbsp;·&nbsp; 1σ bajista: <b style='color:{RED}'>{price-vd["price_1s"]:.{dec}f}</b><br>
+            2σ alcista (95%): <b style='color:{GREEN}'>{price+vd["price_2s"]:.{dec}f}</b>
+            &nbsp;·&nbsp; 2σ bajista: <b style='color:{RED}'>{price-vd["price_2s"]:.{dec}f}</b>
+            </div>
+        </div>""", unsafe_allow_html=True)
 
+    # Kurtosis / Fat tails warning
     rets_arr = np.diff(np.log(st.session_state.df["Close"].values.astype(float)))
-    kurt=float(stats.kurtosis(rets_arr)); skew=float(stats.skew(rets_arr))
-    if abs(kurt)>1:
-        st.warning(f"**Colas gordas** — Kurtosis={kurt:.2f}. Movimientos extremos más frecuentes de lo que asume el modelo GBM. Usa percentiles p5/p95 como referencia.")
+    kurt = float(stats.kurtosis(rets_arr))
+    skew = float(stats.skew(rets_arr))
+    if abs(kurt) > 1:
+        st.warning(
+            f"**Colas gordas detectadas** — Kurtosis = {kurt:.2f} (normal = 0). "
+            f"Los retornos de {ticker} tienen colas más gruesas que la distribución normal. "
+            f"El Monte Carlo (GBM log-normal) puede **subestimar** los movimientos extremos. "
+            f"Usa el **percentil 95/5** como referencia, no solo la media."
+        )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ③ VOLUMEN
 # ─────────────────────────────────────────────────────────────────────────────
 with tab3:
-    vp   = r["vol_profile"]; vwap=r["vwap_series"]; delt=r["delta_series"]
-    danom= r["df_anom"];     df=st.session_state.df; pn=r["price"]
-    dec  = 1 if pn>1000 else 2 if pn>100 else 4
-    cum_d= float(delt.sum()); rec_d=float(delt.iloc[-6:].sum())
-    vwap_v=float(vwap.iloc[-1])
+    vp   = r["vol_profile"]
+    vwap = r["vwap_series"]
+    delt = r["delta_series"]
+    danom= r["df_anom"]
+    df   = st.session_state.df
+    price_now = r["price"]
+    dec  = 1 if price_now>1000 else 2 if price_now>100 else 4
+
+    # KPIs
+    poc_dist = (price_now - vp["poc"]) / price_now * 100
+    vwap_dist= (price_now - float(vwap.iloc[-1])) / price_now * 100
+    cum_delta= float(delt.sum())
+    n_spikes = int((danom["anomaly"].isin(["ABSORCIÓN","SPIKE VOLUMEN"])).sum())
+    n_abs    = int((danom["anomaly"] == "ABSORCIÓN").sum())
+    n_dry    = int((danom["anomaly"] == "RUPTURA SECA").sum())
 
     va1,va2,va3,va4,va5,va6 = st.columns(6)
-    kpi(va1,"POC",f"{vp['poc']:.{dec}f}",f"{'▲' if pn>vp['poc'] else '▼'} {abs((pn-vp['poc'])/pn*100):.3f}%",GREEN if pn>vp["poc"] else RED)
-    kpi(va2,"VAH",f"{vp['vah']:.{dec}f}","70% del volumen",BLUE)
-    kpi(va3,"VAL",f"{vp['val']:.{dec}f}","70% del volumen",BLUE)
-    kpi(va4,"VWAP",f"{vwap_v:.{dec}f}","precio medio ponderado",GREEN if pn>vwap_v else RED)
-    kpi(va5,"Delta Acumulado",f"{cum_d:+,.0f}","comprador/vendedor",GREEN if cum_d>0 else RED)
-    n_sp=int((danom["anomaly"].isin(["ABSORCIÓN","SPIKE VOL"])).sum())
-    kpi(va6,"Anomalías Vol",f"{n_sp} spikes","velas anómalas",ORANGE if n_sp>0 else MUTED)
+    kpi(va1, "POC (Máx. Volumen)",
+        f"{vp['poc']:.{dec}f}",
+        f"{'▲' if price_now>vp['poc'] else '▼'} {abs(poc_dist):.3f}% del precio",
+        GREEN if price_now > vp["poc"] else RED)
+    kpi(va2, "Value Area High",   f"{vp['vah']:.{dec}f}", "70% del volumen", BLUE)
+    kpi(va3, "Value Area Low",    f"{vp['val']:.{dec}f}", "70% del volumen", BLUE)
+    kpi(va4, "VWAP",
+        f"{float(vwap.iloc[-1]):.{dec}f}",
+        f"{'Por encima' if price_now>float(vwap.iloc[-1]) else 'Por debajo'} del VWAP",
+        GREEN if price_now > float(vwap.iloc[-1]) else RED)
+    kpi(va5, "Delta Acumulado",
+        f"{cum_delta:+,.0f}",
+        "comprador (+) / vendedor (−)",
+        GREEN if cum_delta > 0 else RED)
+    kpi(va6, "Anomalías",
+        f"{n_spikes} spikes · {n_abs} absorción · {n_dry} seca",
+        "velas con volumen anómalo", ORANGE if n_spikes > 0 else MUTED)
 
-    st.plotly_chart(chart_volume_profile(df,vp,vwap,delt,danom), use_container_width=True)
+    st.markdown(f"#### 📊 {ticker} H4 — Perfil de Volumen · VWAP · Volume Delta")
+    fig_vol = fig_volume_profile(df, vp, vwap, delt, danom)
+    st.plotly_chart(fig_vol, use_container_width=True)
 
-    cp1,cp2 = st.columns(2)
-    with cp1:
-        if vp["val"]<=pn<=vp["vah"]:
-            pi="Precio en <b>Value Area</b>. Mercado en equilibrio — sin dirección institucional clara. Tiende a regresar al POC."; pc=YELLOW
-        elif pn>vp["vah"]:
-            pi=f"Precio <b>sobre VAH</b> ({vp['vah']:.{dec}f}). Compradores en control. VAH es soporte en retrocesos."; pc=GREEN
+    # Interpretación POC / VA
+    col_poc, col_vwap = st.columns(2)
+    with col_poc:
+        price_in_va = vp["val"] <= price_now <= vp["vah"]
+        price_above_va = price_now > vp["vah"]
+        price_below_va = price_now < vp["val"]
+        if price_in_va:
+            poc_interp = f"""Precio dentro del <b>Value Area</b> (entre VAL {vp['val']:.{dec}f} y VAH {vp['vah']:.{dec}f}).
+            El 70% del volumen se negoció en esta zona. <b>Mercado en equilibrio</b> — sin dirección institucional clara.
+            El precio tiende a regresar al POC ({vp['poc']:.{dec}f}) cuando está en VA."""
+            poc_color = YELLOW
+        elif price_above_va:
+            poc_interp = f"""Precio <b>por encima del Value Area</b> (VAH {vp['vah']:.{dec}f}).
+            Los compradores han tomado el control sacando el precio de la zona de mayor volumen.
+            El VAH actúa como <b>soporte</b> en retrocesos. Si el precio regresa al VA es señal de debilidad alcista."""
+            poc_color = GREEN
         else:
-            pi=f"Precio <b>bajo VAL</b> ({vp['val']:.{dec}f}). Vendedores en control. VAL es resistencia en rebotes."; pc=RED
-        info_card("📍 POC · VALUE AREA", pi, pc)
-    with cp2:
-        if pn>vwap_v*1.002:
-            vi2="Precio <b>sobre VWAP</b>. Compradores pagando encima de la media. VWAP es soporte dinámico."; vc2=GREEN
-        elif pn<vwap_v*0.998:
-            vi2="Precio <b>bajo VWAP</b>. Vendedores dominan. VWAP es resistencia dinámica."; vc2=RED
+            poc_interp = f"""Precio <b>por debajo del Value Area</b> (VAL {vp['val']:.{dec}f}).
+            Los vendedores han sacado el precio de la zona de acuerdo. El VAL actúa como <b>resistencia</b>.
+            Si el precio regresa al VA sin volumen es señal de trampa bajista."""
+            poc_color = RED
+
+        st.markdown(f"""<div class='entry-box' style='border-left-color:{poc_color}'>
+            <div style='font-size:9px;letter-spacing:3px;color:{poc_color};
+                text-transform:uppercase;margin-bottom:8px'>📍 POC · VALUE AREA</div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.8'>{poc_interp}</div>
+        </div>""", unsafe_allow_html=True)
+
+    with col_vwap:
+        vwap_val = float(vwap.iloc[-1])
+        if price_now > vwap_val * 1.002:
+            vwap_interp = f"""Precio <b>por encima del VWAP</b> ({vwap_val:.{dec}f}) en {vwap_dist:.3f}%.
+            Los compradores están pagando por encima del precio medio ponderado por volumen.
+            El VWAP actúa como <b>soporte dinámico</b>. Institucionales que compraron en el día están en beneficio."""
+            vwap_color = GREEN
+        elif price_now < vwap_val * 0.998:
+            vwap_interp = f"""Precio <b>por debajo del VWAP</b> ({vwap_val:.{dec}f}) en {abs(vwap_dist):.3f}%.
+            Los vendedores dominan — el precio medio ponderado está por encima del actual.
+            El VWAP actúa como <b>resistencia dinámica</b>. Posiciones largas del día están en pérdida."""
+            vwap_color = RED
         else:
-            vi2="Precio <b>en el VWAP</b>. Equilibrio comprador/vendedor. Espera separación con volumen."; vc2=YELLOW
-        info_card("📈 VWAP", vi2, vc2)
+            vwap_interp = f"""Precio <b>en el VWAP</b> ({vwap_val:.{dec}f}) — zona de equilibrio.
+            Compradores y vendedores están igualados en precio medio. Sin dirección institucional clara.
+            Espera separación del VWAP para tomar posición."""
+            vwap_color = YELLOW
 
-    st.markdown("#### ⚡ Volume Delta")
-    delta_trend="compradora" if rec_d>0 else "vendedora"
-    delta_str  = f"{rec_d:+,.0f}; Acumulado: {cum_d:+,.0f}"
-    delta_diag = (f"Delta acumulado <b>{'positivo' if cum_d>0 else 'negativo'}</b> con último día "
-                  f"<b>{'confirmando' if (rec_d>0)==(cum_d>0) else 'divergiendo'}</b>. "
-                  f"{'⚠️ <b>Divergencia:</b> delta reciente vs acumulado opuesto — posible giro.' if (rec_d>0)!=(cum_d>0) else ''}")
-    info_card("DIAGNÓSTICO VOLUME DELTA", delta_diag, GREEN if cum_d>0 else RED)
+        st.markdown(f"""<div class='entry-box' style='border-left-color:{vwap_color}'>
+            <div style='font-size:9px;letter-spacing:3px;color:{vwap_color};
+                text-transform:uppercase;margin-bottom:8px'>📈 VWAP</div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.8'>{vwap_interp}</div>
+        </div>""", unsafe_allow_html=True)
 
-    st.markdown("#### 🔍 Anomalías de Volumen")
-    anom_df = danom[danom["anomaly"]!="NORMAL"][
-        ["Open","High","Low","Close","vol_eff","vol_z","anomaly","anom_score"]].copy().tail(20)
-    if len(anom_df)>0:
-        anom_df.columns=["Open","High","Low","Close","Vol","Z-Score","Tipo","Score"]
-        anom_df=anom_df.round({"Open":dec,"High":dec,"Low":dec,"Close":dec,"Vol":0,"Z-Score":2,"Score":1})
-        def _ca(v): return {"ABSORCIÓN":f"color:{PURPLE}","SPIKE VOL":f"color:{ORANGE}","MOMENTUM":f"color:{CYAN}","RUPTURA SECA":f"color:{YELLOW}"}.get(v,f"color:{MUTED}")
-        def _cz(v): return f"color:{ORANGE};font-weight:bold" if v>2.5 else f"color:{YELLOW}" if v>1.8 else f"color:{MUTED}"
-        _s=anom_df.style; _fn="map" if hasattr(_s,"map") else "applymap"
-        st.dataframe(getattr(_s,_fn)(_ca,subset=["Tipo"]).pipe(lambda s:getattr(s,_fn)(_cz,subset=["Z-Score"])), use_container_width=True)
+    st.divider()
+
+    # Volume Delta interpretation
+    st.markdown("#### ⚡ Volume Delta — Presión Compradora vs Vendedora")
+    recent_delta  = delt.iloc[-6:].sum()   # últimas 6 velas H4 = 1 día
+    delta_trend   = "compradora" if recent_delta > 0 else "vendedora"
+    delta_color   = GREEN if recent_delta > 0 else RED
+    delta_strength= abs(recent_delta) / (abs(delt).mean() + 1e-10)
+
+    dc1, dc2, dc3 = st.columns(3)
+    kpi(dc1, "Delta último día (6v H4)",
+        f"{recent_delta:+,.0f}",
+        f"Presión {delta_trend}", delta_color)
+    kpi(dc2, "Fuerza del delta",
+        f"{delta_strength:.1f}×",
+        "vs media histórica", ORANGE if delta_strength > 2 else MUTED)
+    kpi(dc3, "Delta acumulado total",
+        f"{cum_delta:+,.0f}",
+        "desde inicio del período", GREEN if cum_delta > 0 else RED)
+
+    st.markdown(f"""<div class='entry-box'>
+        <div style='font-size:9px;letter-spacing:3px;color:{CYAN};
+            text-transform:uppercase;margin-bottom:8px'>⚡ DIAGNÓSTICO VOLUME DELTA</div>
+        <div style='font-size:12px;color:{TEXT};line-height:1.8'>
+        Delta acumulado del período: <b style='color:{GREEN if cum_delta>0 else RED}'>{cum_delta:+,.0f}</b>
+        — presión {'compradora dominante' if cum_delta>0 else 'vendedora dominante'} en el período analizado.<br>
+        Último día ({recent_delta:+,.0f}): {'Compradores acelerando' if recent_delta>0 and cum_delta>0 else
+        'Vendedores acelerando' if recent_delta<0 and cum_delta<0 else
+        'Divergencia: delta reciente va en contra del acumulado — posible giro inminente'}.<br>
+        {'⚠️ <b>Divergencia Delta:</b> el delta reciente contradice el acumulado. Señal de posible reversión.' if (recent_delta>0) != (cum_delta>0) else ''}
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
+    # Anomaly table
+    st.markdown("#### 🔍 Registro de Anomalías de Volumen")
+    anom_df = danom[danom["anomaly"] != "NORMAL"][
+        ["Open","High","Low","Close","volume_eff","vol_z","anomaly","anom_score"]
+    ].copy().tail(20)
+
+    if len(anom_df) > 0:
+        anom_df.columns = ["Open","High","Low","Close","Vol. Efectivo","Z-Score Vol","Tipo","Score"]
+        anom_df = anom_df.round({"Open":dec,"High":dec,"Low":dec,"Close":dec,
+                                  "Vol. Efectivo":0,"Z-Score Vol":2,"Score":1})
+
+        def color_anomaly(val):
+            colors = {"ABSORCIÓN": f"color:{PURPLE}",
+                      "SPIKE VOLUMEN": f"color:{ORANGE}",
+                      "MOMENTUM": f"color:{CYAN}",
+                      "RUPTURA SECA": f"color:{YELLOW}"}
+            return colors.get(val, f"color:{MUTED}")
+
+        def color_zscore(val):
+            if val > 2.5:   return f"color:{ORANGE};font-weight:bold"
+            elif val > 1.8: return f"color:{YELLOW}"
+            elif val < -1.5:return f"color:{CYAN}"
+            return f"color:{MUTED}"
+
+        # pandas >= 2.1 renamed applymap to map; support both
+        _style = anom_df.style
+        _fn    = "map" if hasattr(_style, "map") else "applymap"
+        styled = (getattr(_style, _fn)(color_anomaly, subset=["Tipo"])
+                  .pipe(lambda s: getattr(s, _fn)(color_zscore, subset=["Z-Score Vol"])))
+        st.dataframe(styled, use_container_width=True)
+
+        # Legend
+        st.markdown(f"""<div style='font-size:10px;color:{MUTED};line-height:2;margin-top:8px'>
+        <span style='color:{PURPLE}'>■ ABSORCIÓN</span> — Volumen muy alto + vela pequeña. Institucional absorbiendo oferta/demanda.
+        &nbsp;·&nbsp;
+        <span style='color:{ORANGE}'>■ SPIKE VOLUMEN</span> — Pico de volumen extremo + movimiento fuerte. Decisión institucional.
+        &nbsp;·&nbsp;
+        <span style='color:{CYAN}'>■ MOMENTUM</span> — Volumen alto + cuerpo grande. Impulso real con confirmación de volumen.
+        &nbsp;·&nbsp;
+        <span style='color:{YELLOW}'>■ RUPTURA SECA</span> — Movimiento grande sin volumen. Ruptura sospechosa — puede revertir.
+        </div>""", unsafe_allow_html=True)
     else:
-        st.info("No se detectaron anomalías de volumen significativas.")
+        st.info("No se detectaron anomalías de volumen significativas en el período analizado.")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ④ MACRO CUANTITATIVA
 # ─────────────────────────────────────────────────────────────────────────────
 with tab4:
-    macro = st.session_state.macro_data
+    st.markdown("### 🌐 Contexto Macro — Prompt para Gemini / ChatGPT")
 
-    if not macro:
-        st.info("👈 Pulsa **Cargar Macro FRED** en la barra lateral para cargar datos macroeconómicos gratuitos.")
-        st.markdown("""
-        **Datos disponibles (Federal Reserve — sin API key):**
-        - **Tipos reales**: Fed Funds Rate, PCE Core, TIPS (2Y, 5Y, 10Y)
-        - **Curva de tipos**: Treasuries 2Y, 5Y, 10Y, 30Y + spreads
-        - **Inflación**: CPI, PCE, Breakeven 10Y
-        - **Condiciones financieras**: Chicago Fed NFCI, VIX
-        - **Macro real**: Desempleo, Nóminas no agrícolas
-        """)
+    with st.expander("📋 Copia este prompt → pégalo en Gemini/ChatGPT → pega la respuesta abajo",
+                      expanded=True):
+        prompt_text = st.session_state.macro_prompt or build_macro_prompt(ticker, asset_type, horizon)
+        st.code(prompt_text, language="text")
+        st.caption("💡 [gemini.google.com](https://gemini.google.com) o [chat.openai.com](https://chat.openai.com) — ambos gratuitos.")
+
+    macro_input = st.text_area(
+        "📥 Pega aquí el JSON de respuesta de la IA:",
+        height=130,
+        placeholder='{"macro":1,"macro_label":"Alcista","macro_why":"...","news":0,...}',
+        key="macro_json_input"
+    )
+    if st.button("✅ Procesar contexto macro", use_container_width=True):
+        if macro_input.strip():
+            try:
+                m = re.search(r'\{[\s\S]*\}', macro_input)
+                parsed = json.loads(m.group()) if m else None
+                if parsed:
+                    st.session_state.context = parsed
+                    st.success("✓ Contexto procesado. Vuelve a ejecutar el modelo para aplicarlo.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error JSON: {e}")
+
+    ctx = st.session_state.context
+    if ctx:
+        st.divider()
+        sc_ = lambda v: GREEN if v>0 else RED if v<0 else YELLOW
+        vc_ = lambda v: ORANGE if v=="high" else CYAN if v=="low" else TEXT
+
+        m1,m2,m3 = st.columns(3)
+        kpi(m1, f"Sesgo Macro ({horizon}d)", ctx.get("macro_label","—"), ctx.get("macro_why","—"), sc_(ctx.get("macro",0)))
+        kpi(m2, "Noticias / Eventos",        ctx.get("news_label","—"),  ctx.get("news_why","—"),  sc_(ctx.get("news",0)))
+        kpi(m3, "Volatilidad Esperada",       ctx.get("vol_label","—"),   ctx.get("vol_why","—"),   vc_(ctx.get("vol","normal")))
+
+        st.info(f"💬 **Resumen:** {ctx.get('summary','—')}")
+
+        # Risk events
+        evts = ctx.get("risk_events", [])
+        if evts:
+            st.markdown("#### 📅 Eventos de Riesgo Esta Semana")
+            for i, ev in enumerate(evts):
+                clr = [ORANGE, YELLOW, CYAN][i%3]
+                st.markdown(f"""<div style='background:{S1};border:1px solid {BORDER};
+                    border-left:3px solid {clr};border-radius:3px;
+                    padding:8px 14px;margin-bottom:6px;font-size:12px;color:{TEXT}'>{ev}</div>""",
+                    unsafe_allow_html=True)
+
+        # Correlations
+        corrs = ctx.get("correlations", {})
+        if corrs:
+            st.markdown("#### 🔗 Correlaciones Institucionales")
+            ccs = st.columns(len(corrs))
+            for col, (k,v) in zip(ccs, corrs.items()):
+                c = GREEN if "alcista" in v.lower() else RED if "bajista" in v.lower() else YELLOW
+                kpi(col, k, v.upper(), "correlación", c)
+
+        # Combined macro impact
+        st.divider()
+        mv = ctx.get("macro",0); nv = ctx.get("news",0)
+        boost = (mv+nv)/4*8
+        st.markdown(f"""<div class='entry-box'>
+            <div style='font-size:9px;letter-spacing:3px;color:{CYAN};
+                text-transform:uppercase;margin-bottom:8px'>IMPACTO EN EL MODELO MC</div>
+            <div style='font-size:12px;color:{TEXT};line-height:1.9'>
+            El contexto ajusta la probabilidad MC en
+            <b style='color:{GREEN if boost>0 else RED}'>{boost:+.1f}%</b>
+            sobre la base estadística pura.<br>
+            Macro <b>{ctx.get("macro_label","Neutral")}</b> + Noticias <b>{ctx.get("news_label","Neutros")}</b>
+            → sesgo combinado <b style='color:{sc_(mv+nv)}'>
+            {"alcista" if mv+nv>0 else "bajista" if mv+nv<0 else "neutral"}</b><br>
+            <span style='color:{MUTED};font-size:10px'>
+            Vuelve a ejecutar el modelo para aplicar este contexto.
+            </span>
+            </div>
+        </div>""", unsafe_allow_html=True)
     else:
-        rr = calc_real_rates(macro)
-
-        # KPIs macro
-        mk1,mk2,mk3,mk4,mk5,mk6 = st.columns(6)
-        kpi(mk1,"Fed Funds Rate",f"{rr.get('fed_funds',macro.get('FEDFUNDS',{}).get('latest','N/A'))}%","tipo nominal actual",CYAN)
-        kpi(mk2,"PCE Core",f"{rr.get('pce_core',macro.get('PCEPILFE',{}).get('latest','N/A'))}%","inflación objetivo Fed",ORANGE)
-        rra=rr.get("real_rate_approx","N/A")
-        kpi(mk3,"Tipo Real Aprox",f"{rra:+.2f}%" if isinstance(rra,float) else "N/A","FF - PCE Core",GREEN if isinstance(rra,float) and rra>0 else RED)
-        tips10=rr.get("DFII10","N/A"); kpi(mk4,"TIPS 10Y",f"{tips10}%" if tips10!="N/A" else "N/A","tipo real mercado",GREEN if isinstance(tips10,float) and tips10>0 else RED)
-        sp=rr.get("spread_10y2y","N/A"); kpi(mk5,"Spread 10Y-2Y",f"{sp:+.2f}%" if isinstance(sp,float) else "N/A","invertida = recesión",RED if isinstance(sp,float) and sp<0 else GREEN)
-        be=rr.get("breakeven_10y","N/A"); kpi(mk6,"Breakeven 10Y",f"{be}%" if be!="N/A" else "N/A","inflación esperada",ORANGE)
-
-        # Gráfico tipos reales + curva
-        st.markdown("#### Tipos Reales · Curva de Tipos · Spreads")
-        st.plotly_chart(chart_real_rates(macro), use_container_width=True)
-
-        # Gráfico indicadores secundarios
-        st.markdown("#### Condiciones de Mercado")
-        st.plotly_chart(chart_macro_indicators(macro), use_container_width=True)
-
-        # Interpretación
-        st.markdown("#### Interpretación Macroeconómica")
-        mi1,mi2,mi3 = st.columns(3)
-        with mi1:
-            if isinstance(rra,float):
-                if rra>2:
-                    rt_txt="<b>Tipos reales muy positivos</b> — entorno restrictivo. La Fed está por encima de la inflación. Presión sobre activos de riesgo, favorable para el dólar."
-                    rt_c=RED
-                elif rra>0:
-                    rt_txt="<b>Tipos reales positivos</b> — política moderadamente restrictiva. Equilibrio entre crecimiento e inflación."
-                    rt_c=YELLOW
-                elif rra>-1:
-                    rt_txt="<b>Tipos reales ligeramente negativos</b> — política levemente expansiva. Contexto favorable para activos de riesgo."
-                    rt_c="#69f0ae"
-                else:
-                    rt_txt="<b>Tipos reales muy negativos</b> — represión financiera. Históricamente favorable para oro y activos reales."
-                    rt_c=GREEN
-                info_card("ENTORNO DE TIPOS REALES", rt_txt, rt_c)
-        with mi2:
-            if isinstance(sp,float):
-                if sp<-0.5:
-                    cur_txt=f"<b>Curva invertida ({sp:+.2f}%)</b> — señal histórica de recesión. Los inversores esperan bajadas de tipos. Negativo para cíclicos."
-                    cur_c=RED
-                elif sp<0:
-                    cur_txt=f"<b>Curva ligeramente invertida ({sp:+.2f}%)</b> — precaución. Mercados anticipan desaceleración."
-                    cur_c=ORANGE
-                elif sp<0.5:
-                    cur_txt=f"<b>Curva plana ({sp:+.2f}%)</b> — transición. Sin señal direccional clara."
-                    cur_c=YELLOW
-                else:
-                    cur_txt=f"<b>Curva normal ({sp:+.2f}%)</b> — entorno expansivo. Los mercados no anticipan recesión inmediata."
-                    cur_c=GREEN
-                info_card("CURVA DE TIPOS", cur_txt, cur_c)
-        with mi3:
-            vix_val=macro.get("VIXCLS",{}).get("latest","N/A")
-            nfci_val=macro.get("NFCI",{}).get("latest","N/A")
-            if isinstance(vix_val,(int,float)):
-                if vix_val>30:
-                    vix_txt=f"<b>VIX alto ({vix_val:.1f})</b> — pánico de mercado. Volatilidad implícita elevada. Históricamente buena zona de compra a largo plazo."
-                    vix_c=RED
-                elif vix_val>20:
-                    vix_txt=f"<b>VIX moderado ({vix_val:.1f})</b> — cautela. Mercados en modo risk-off parcial."
-                    vix_c=ORANGE
-                else:
-                    vix_txt=f"<b>VIX bajo ({vix_val:.1f})</b> — complacencia. Mercados tranquilos. Riesgo de spike si hay sorpresa negativa."
-                    vix_c=GREEN
-                info_card("VIX & CONDICIONES FINANCIERAS", vix_txt+
-                          (f"<br>NFCI: <b>{nfci_val:.2f}</b> {'(restrictivo)' if isinstance(nfci_val,(int,float)) and nfci_val>0 else '(acomodaticio)'}" if isinstance(nfci_val,(int,float)) else ""), vix_c)
-
-        # Tabla resumen
-        st.markdown("#### Tabla de Datos FRED")
-        fred_rows=[]; 
-        for sid,d in macro.items():
-            s=d["series"]
-            fred_rows.append({
-                "Serie":d["name"],"Código":sid,
-                "Actual":f"{d['latest']:.2f}",
-                "Hace 1m":f"{float(s.iloc[-2]):.2f}" if len(s)>=2 else "N/A",
-                "Hace 6m":f"{float(s.iloc[-6]):.2f}" if len(s)>=6 else "N/A",
-                "Hace 1a":f"{float(s.iloc[-13]):.2f}" if len(s)>=13 else "N/A",
-                "Variación":f"{float(s.iloc[-1])-float(s.iloc[-2]):+.2f}" if len(s)>=2 else "N/A"
-            })
-        if fred_rows:
-            st.dataframe(pd.DataFrame(fred_rows), use_container_width=True, hide_index=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ⑤ IA — GEMINI
-# ─────────────────────────────────────────────────────────────────────────────
-with tab5:
-    gkey = st.session_state.get("gemini_key","")
-
-    if not gkey:
-        st.info("👈 Introduce tu **Gemini API Key** en la barra lateral.\n\nObtén una gratis en [aistudio.google.com/apikey](https://aistudio.google.com/apikey)")
-    else:
-        ai_prompt = build_ai_prompt(ticker, asset_type, r, summ,
-                                     st.session_state.macro_data or {})
-
-        with st.expander("📋 Prompt enviado a Gemini", expanded=False):
-            st.code(ai_prompt, language="text")
-            st.caption("Este prompt incluye todos los datos cuantitativos del modelo.")
-
-        col_ai1, col_ai2 = st.columns([1,3])
-        with col_ai1:
-            if st.button("🤖 Generar análisis Gemini", use_container_width=True, type="primary"):
-                with st.spinner("Gemini analizando los datos del modelo..."):
-                    result = call_gemini(ai_prompt, gkey)
-                    st.session_state.ai_analysis = result
-            if st.button("🔄 Regenerar", use_container_width=True):
-                with st.spinner("Regenerando análisis..."):
-                    st.session_state.ai_analysis = call_gemini(ai_prompt, gkey)
-
-        if st.session_state.ai_analysis:
-            st.markdown("#### Análisis Cuantitativo — Gemini 2.0 Flash")
-            st.markdown(f"""<div class='card' style='border-left:4px solid {PURPLE}'>
-                <div style='font-size:10px;letter-spacing:2px;color:{PURPLE};
-                    text-transform:uppercase;margin-bottom:12px;font-family:JetBrains Mono,monospace'>
-                    ⬡ ANÁLISIS GENERADO POR IA — SOLO INFORMATIVO, NO ASESORAMIENTO FINANCIERO
-                </div>
-                <div style='font-size:13px;color:{TEXT};line-height:1.85;white-space:pre-wrap'>{st.session_state.ai_analysis}</div>
-            </div>""", unsafe_allow_html=True)
-
-            # Datos del modelo que alimentaron el análisis
-            st.markdown("#### Datos del modelo utilizados")
-            d1,d2,d3,d4 = st.columns(4)
-            kpi(d1,"Z-Diff",f"{r['last_z']:.3f}",zctx["signal"],zctx["color"])
-            kpi(d2,"MC P(alcista)",f"{r['adj_bull']:.1f}%","Monte Carlo GBM",GREEN if r["adj_bull"]>=60 else RED)
-            kpi(d3,"Markov mañana",mk["labels"][int(np.argmax(nd))],f"{max(nd)*100:.0f}%",[RED,YELLOW,GREEN][int(np.argmax(nd))])
-            rr2=summ.get("real_rates",{}); rra2=rr2.get("real_rate_approx","N/A")
-            kpi(d4,"Tipo Real",f"{rra2:+.2f}%" if isinstance(rra2,float) else "N/A","FF - PCE Core",GREEN if isinstance(rra2,float) and rra2<0 else RED)
+        st.info("Sin contexto macro aún. Copia el prompt de arriba y pega la respuesta de la IA.")
 
 # ─── FOOTER ───────────────────────────────────────────────────────────────────
 st.divider()
-st.markdown(f"""<div style='font-size:10px;color:{MUTED};text-align:center;line-height:2'>
-⚠️ <b>QuantEdge PRO</b> es una herramienta de análisis cuantitativo educativa.
-No constituye asesoramiento financiero ni recomendación de inversión.<br>
-Monte Carlo GBM · Z-Diff Order Flow · Cadenas de Markov · Volatilidad Parkinson/Garman-Klass
-· Datos FRED (Federal Reserve) · Gemini AI<br>
-Yahoo Finance H4 · Tipos reales FRED · Sin API key de mercado requerida
+st.markdown(f"""<div style='font-size:10px;color:{MUTED};text-align:center;line-height:1.8'>
+⚠️ Modelo educativo-cuantitativo. No constituye asesoramiento financiero.<br>
+Monte Carlo GBM multi-step · Z-Diff Order Flow · Cadenas de Markov · Volatilidad Parkinson / Garman-Klass<br>
+Datos: Yahoo Finance H4 · Sin API Key requerida
 </div>""", unsafe_allow_html=True)
